@@ -42,7 +42,7 @@
     Feed: "channels:Feed",
   });
 
-  Object.assign(WXE, {
+  Object.assign(WXU, {
     onAPILoaded: function (handler) {
       WXE.on(WXE.Events.APILoaded, handler);
       return function () {

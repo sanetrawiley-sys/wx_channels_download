@@ -251,7 +251,7 @@ var WXU = (() => {
       await __wx_load_script(__wx_asset_url("/lib/recorder.min.js"));
       return WXAudio.mediaBufferToWav(...args);
     },
-    wav_to_mp3_blob: WXAudio.wavBlobToMP3,
+    // wav_to_mp3_blob: WXAudio.wavBlobToMP3,
     async media_to_mp3(buf) {
       return WXAudio.mediaToMp3(buf);
     },

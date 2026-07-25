@@ -614,7 +614,7 @@ async function __wx_channels_decrypt(seed) {
   var WXAPI3 = {};
   var WXAPI4 = {};
 
-  WXE.onAPILoaded((variables) => {
+  WXU.onAPILoaded((variables) => {
     const keys = Object.keys(variables);
     for (let i = 0; i < keys.length; i++) {
       (() => {
@@ -646,7 +646,7 @@ async function __wx_channels_decrypt(seed) {
     }
   });
 
-  WXE.onUtilsLoaded((methods) => {
+  WXU.onUtilsLoaded((methods) => {
     Object.assign(WXAPI, methods);
   });
 

@@ -181,14 +181,16 @@ function __wx_attach_live_download_dropdown_menu(trigger, options) {
       __wx_attach_live_download_dropdown_menu($btn, options);
     }
   }
-  WXU.onFetchFeedProfile((data) => {
-    console.log("[live.js]onFetchFeedProfile", data);
-    profile = data;
-    handleLoaded(profile, live);
-  });
-  WXU.onJoinLive(async (data) => {
-    console.log("[live.js]onJoinLive", JSON.stringify(data));
-    live = data;
-    handleLoaded(profile, live);
-  });
+  WXU.onDOMContentLoaded(function () {
+    WXU.onFetchFeedProfile((data) => {
+      console.log("[live.js]onFetchFeedProfile", data);
+      profile = data;
+      handleLoaded(profile, live);
+    });
+    WXU.onJoinLive(async (data) => {
+      console.log("[live.js]onJoinLive", JSON.stringify(data));
+      live = data;
+      handleLoaded(profile, live);
+    });
+  })
 })();
