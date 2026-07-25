@@ -121,11 +121,7 @@ func (c *APIClient) handleStreamVideo(ctx *gin.Context) {
 				var resource model.DownloadResource
 				if c.db.First(&task, id).Error == nil &&
 					c.db.Where("task_id = ?", id).Order("merge_order ASC, id ASC").First(&resource).Error == nil {
-					path = task.SavePath
-					// 兼容曾经仅保存目录的任务记录。
-					if task.ResourceType != model.ResourceTypeFile || filepath.Base(path) != filepath.Base(resource.Name) {
-						path = filepath.Join(path, filepath.Base(resource.Name))
-					}
+					path = filepath.Join(task.SavePath, filepath.Base(resource.Name))
 				}
 			}
 		}

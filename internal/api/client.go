@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	// "net/url"
-	// "regexp"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,10 +96,11 @@ func NewAPIClient(cfg *APIConfig, parent_logger *zerolog.Logger, db *gorm.DB, st
 	}
 
 	apiClient.downloader = hermes.New(&dbTaskStore{db: db},
+		&zerologAdapter{logger: &logger},
 		func(taskID int, event hermes.EventType) {
 			logger.Debug().Int("task_id", taskID).Str("event", string(event)).Msg("Hermes task event")
 			apiClient.broadcastDownloadTaskUpsert([]int{taskID})
-		}, cfg.MaxRunning)
+		}, cfg.MaxRunning, cfg.FilenameTemplate)
 	apiClient.downloader.RegisterProtocol(protocol.NewHTTPDriver())
 
 	status_ws.OnConnected = func(wsClient *download.StatusWSClient) {
@@ -357,6 +358,23 @@ type dbTaskStore struct {
 var _ hermes.Store = (*dbTaskStore)(nil)
 var _ hermes.OutputNameStore = (*dbTaskStore)(nil)
 
+// zerologAdapter wraps zerolog.Logger to implement hermes.Logger.
+type zerologAdapter struct {
+	logger *zerolog.Logger
+}
+
+func (z *zerologAdapter) Info(format string, args ...interface{}) {
+	z.logger.Info().Msgf(format, args...)
+}
+
+func (z *zerologAdapter) Warn(format string, args ...interface{}) {
+	z.logger.Warn().Msgf(format, args...)
+}
+
+func (z *zerologAdapter) Error(format string, args ...interface{}) {
+	z.logger.Error().Msgf(format, args...)
+}
+
 func (s *dbTaskStore) LoadTask(taskID int) (*hermes.Task, error) {
 	var task model.DownloadTaskV1
 	if err := s.db.Where("id = ?", taskID).First(&task).Error; err != nil {
@@ -405,21 +423,21 @@ func (s *dbTaskStore) LoadTask(taskID int) (*hermes.Task, error) {
 			return nil, fmt.Errorf("资源 %d 没有已启用的下载端点", resource.Id)
 		}
 		resourceInfos = append(resourceInfos, hermes.Resource{
-			ID:        resource.Id,
-			Name:      resource.Name,
-			Endpoints: resourceEndpoints,
+			ID:           resource.Id,
+			Name:         resource.Name,
+			ResourceType: resource.ResourceType,
+			Endpoints:    resourceEndpoints,
 		})
 	}
 	primary := resourceInfos[0]
 	return &hermes.Task{
-		ID:           task.Id,
-		Name:         primary.Name,
-		SavePath:     task.SavePath,
-		ResourceType: task.ResourceType,
-		URL:          primary.Endpoints[0].URL,
-		ResourceID:   primary.ID,
-		Endpoints:    primary.Endpoints,
-		Resources:    resourceInfos,
+		ID:         task.Id,
+		Name:       primary.Name,
+		SavePath:   task.SavePath,
+		URL:        primary.Endpoints[0].URL,
+		ResourceID: primary.ID,
+		Endpoints:  primary.Endpoints,
+		Resources:  resourceInfos,
 	}, nil
 }
 
@@ -431,13 +449,59 @@ func (s *dbTaskStore) UpdateStatus(taskID int, status int) error {
 
 func (s *dbTaskStore) ActivateTask(taskID int) error {
 	now := time.Now().UnixMilli()
-	s.db.Model(&model.DownloadEndpoint{}).
+
+	// Get all endpoints for this task.
+	var endpoints []model.DownloadEndpoint
+	if err := s.db.Where("resource_id IN (SELECT id FROM download_resource WHERE task_id = ?)", taskID).Find(&endpoints).Error; err != nil {
+		return err
+	}
+
+	// Create connections for endpoints that don't have one yet.
+	for _, ep := range endpoints {
+		var count int64
+		if err := s.db.Model(&model.DownloadConnection{}).Where("endpoint_id = ?", ep.Id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			host := ""
+			if parsedURL, err := url.Parse(ep.URL); err == nil {
+				host = parsedURL.Host
+			}
+			conn := model.DownloadConnection{
+				EndpointId: ep.Id,
+				WorkerId:   "worker-" + strconv.Itoa(ep.Id),
+				Host:       host,
+				Status:     1,
+				Bytes:      0,
+				Speed:      0,
+				LastActive: now,
+			}
+			conn.CreatedAt = now
+			conn.UpdatedAt = now
+			if err := s.db.Create(&conn).Error; err != nil {
+				return err
+			}
+		}
+	}
+
+	// Set start_time for all resources.
+	if err := s.db.Model(&model.DownloadResource{}).
+		Where("task_id = ? AND start_time IS NULL", taskID).
+		Updates(map[string]any{"start_time": now, "updated_at": now}).Error; err != nil {
+		return err
+	}
+
+	// Activate all endpoints.
+	if err := s.db.Model(&model.DownloadEndpoint{}).
 		Where("resource_id IN (SELECT id FROM download_resource WHERE task_id = ?)", taskID).
-		Updates(map[string]any{"status": 1, "updated_at": now})
-	s.db.Model(&model.DownloadConnection{}).
+		Updates(map[string]any{"status": 1, "updated_at": now}).Error; err != nil {
+		return err
+	}
+
+	// Activate all connections.
+	return s.db.Model(&model.DownloadConnection{}).
 		Where("endpoint_id IN (SELECT id FROM download_endpoint WHERE resource_id IN (SELECT id FROM download_resource WHERE task_id = ?))", taskID).
-		Updates(map[string]any{"status": 1, "last_active": now, "updated_at": now})
-	return nil
+		Updates(map[string]any{"status": 1, "last_active": now, "updated_at": now}).Error
 }
 
 func (s *dbTaskStore) UpdateProgress(taskID int, downloaded int64, speed int64) error {
@@ -486,7 +550,7 @@ func (s *dbTaskStore) UpdateResourceProgress(resourceID int, downloaded int64, s
 		return err
 	}
 	return s.db.Model(&model.DownloadResource{}).Where("id = ?", resourceID).
-		Updates(map[string]any{"status": 1, "updated_at": now}).Error
+		Updates(map[string]any{"status": 1, "downloaded": downloaded, "speed": speed, "updated_at": now}).Error
 }
 
 func (s *dbTaskStore) UpdateResourceSizeByID(resourceID int, size int64) error {
@@ -498,7 +562,7 @@ func (s *dbTaskStore) UpdateResourceSizeByID(resourceID int, size int64) error {
 func (s *dbTaskStore) FinishResource(resourceID int) error {
 	now := time.Now().UnixMilli()
 	if err := s.db.Model(&model.DownloadResource{}).Where("id = ?", resourceID).
-		Updates(map[string]any{"status": 2, "updated_at": now}).Error; err != nil {
+		Updates(map[string]any{"status": 2, "finish_time": now, "updated_at": now}).Error; err != nil {
 		return err
 	}
 	return s.db.Exec(`UPDATE download_connection SET speed = 0, status = 2, updated_at = ?
@@ -507,6 +571,22 @@ func (s *dbTaskStore) FinishResource(resourceID int) error {
 
 func (s *dbTaskStore) DeactivateConnections(taskID int) error {
 	now := time.Now().UnixMilli()
+
+	// Update resource status for this task's downloading resources.
+	if err := s.db.Model(&model.DownloadResource{}).
+		Where("task_id = ? AND status = 1", taskID).
+		Updates(map[string]any{"status": 1, "updated_at": now}).Error; err != nil {
+		return err
+	}
+
+	// Update segment status for this task's active segments.
+	if err := s.db.Model(&model.DownloadSegment{}).
+		Where("resource_id IN (SELECT id FROM download_resource WHERE task_id = ?) AND status = 1", taskID).
+		Updates(map[string]any{"status": 1, "updated_at": now}).Error; err != nil {
+		return err
+	}
+
+	// Deactivate connections.
 	return s.db.Exec(`UPDATE download_connection SET speed = 0, status = 2, updated_at = ?
 		WHERE endpoint_id IN (
 			SELECT id FROM download_endpoint WHERE resource_id IN (
@@ -531,14 +611,9 @@ func (s *dbTaskStore) FinishTask(taskID int) error {
 	return nil
 }
 
-func (s *dbTaskStore) WriteLog(taskID int, level string, message string) error {
-	now := time.Now().UnixMilli()
-	return s.db.Create(&model.DownloadLog{
-		TaskId:    taskID,
-		Level:     level,
-		Message:   message,
-		CreatedAt: now,
-	}).Error
+func (s *dbTaskStore) RecordError(taskID int, errMsg string) error {
+	return s.db.Model(&model.DownloadTaskV1{}).Where("id = ?", taskID).
+		Updates(map[string]any{"error_message": errMsg, "updated_at": time.Now().UnixMilli()}).Error
 }
 
 func (s *dbTaskStore) CreateSegments(resourceID int, url string, ranges []hermes.SegmentRange) ([]int, error) {

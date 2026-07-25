@@ -56,6 +56,8 @@ type APIConfig struct {
 	BrowserDockerMemoryLimit     string
 	BrowserDockerChromeCommand   string
 
+	FilenameTemplate string
+
 	DBType         string
 	DBHost         string
 	DBPort         string
@@ -144,6 +146,8 @@ func NewAPIConfig(c *config.Config, remote_mode bool) *APIConfig {
 		BrowserDockerShmSize:         viper.GetString("sandbox.shmSize"),
 		BrowserDockerMemoryLimit:     viper.GetString("sandbox.memoryLimit"),
 		BrowserDockerChromeCommand:   viper.GetString("sandbox.chromeCommand"),
+
+		FilenameTemplate: viper.GetString("download.filenameTemplate"),
 
 		DBType:         viper.GetString("db.type"),
 		DBHost:         viper.GetString("db.host"),

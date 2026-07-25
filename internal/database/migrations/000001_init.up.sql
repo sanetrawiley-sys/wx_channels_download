@@ -585,10 +585,10 @@ ON `platform_workflow_run` (`download_task_id`);
 CREATE TABLE IF NOT EXISTS `download_task_v1` (
   `id` INTEGER PRIMARY KEY AUTOINCREMENT,
   `name` TEXT NOT NULL,
-  `resource_type` TEXT NOT NULL DEFAULT 'FILE',
   `status` INTEGER NOT NULL DEFAULT 0,
   `save_path` TEXT NOT NULL,
   `config_json` TEXT,
+  `error_message` TEXT,
   `created_at` INTEGER NOT NULL DEFAULT 0,
   `updated_at` INTEGER NOT NULL DEFAULT 0,
   `deleted_at` INTEGER
@@ -601,15 +601,29 @@ CREATE TABLE IF NOT EXISTS `download_resource` (
   `task_id` INTEGER NOT NULL,
   `name` TEXT,
   `kind` TEXT NOT NULL DEFAULT 'file',
+  `unique_id` TEXT,
+  `resource_type` TEXT NOT NULL DEFAULT 'file',
   `size` INTEGER,
   `status` INTEGER DEFAULT 0,
+  `downloaded` INTEGER DEFAULT 0,
+  `speed` INTEGER DEFAULT 0,
   `merge_order` INTEGER DEFAULT 0,
+  `stream_url` TEXT,
+  `record_start` INTEGER,
+  `record_end` INTEGER,
+  `duration` INTEGER DEFAULT 0,
+  `rotate_minutes` INTEGER DEFAULT 0,
+  `rotate_size` INTEGER DEFAULT 0,
+  `is_live` INTEGER DEFAULT 0,
+  `start_time` INTEGER,
+  `finish_time` INTEGER,
   `created_at` INTEGER NOT NULL DEFAULT 0,
   `updated_at` INTEGER NOT NULL DEFAULT 0,
   `deleted_at` INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_resource_task ON `download_resource` (`task_id`);
+CREATE INDEX IF NOT EXISTS idx_resource_unique_id ON `download_resource` (`unique_id`);
 
 CREATE TABLE IF NOT EXISTS `download_endpoint` (
   `id` INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -662,30 +676,3 @@ CREATE TABLE IF NOT EXISTS `download_connection` (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conn_endpoint ON `download_connection` (`endpoint_id`);
-
-CREATE TABLE IF NOT EXISTS `download_live` (
-  `id` INTEGER PRIMARY KEY AUTOINCREMENT,
-  `task_id` INTEGER NOT NULL,
-  `stream_url` TEXT NOT NULL,
-  `record_start` INTEGER,
-  `record_end` INTEGER,
-  `duration` INTEGER DEFAULT 0,
-  `rotate_minutes` INTEGER DEFAULT 0,
-  `rotate_size` INTEGER DEFAULT 0,
-  `is_live` INTEGER DEFAULT 0,
-  `created_at` INTEGER NOT NULL DEFAULT 0,
-  `updated_at` INTEGER NOT NULL DEFAULT 0,
-  `deleted_at` INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_live_task ON `download_live` (`task_id`);
-
-CREATE TABLE IF NOT EXISTS `download_log` (
-  `id` INTEGER PRIMARY KEY AUTOINCREMENT,
-  `task_id` INTEGER NOT NULL,
-  `level` TEXT NOT NULL DEFAULT 'info',
-  `message` TEXT,
-  `created_at` INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_log_task ON `download_log` (`task_id`);

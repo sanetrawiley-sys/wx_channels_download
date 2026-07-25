@@ -37,8 +37,8 @@ type MockStore struct {
 	activateErr       error
 	createSegmentErr  error
 
-	// Log calls.
-	LogCalls []LogCall
+	// RecordError calls.
+	RecordErrors []string
 
 	// Segment tracking.
 	segmentInfo   []hermes.Segment
@@ -57,13 +57,6 @@ type ProgressCall struct {
 	TaskID     int
 	Downloaded int64
 	Speed      int64
-}
-
-// LogCall records a single log write.
-type LogCall struct {
-	TaskID  int
-	Level   string
-	Message string
 }
 
 // NewMockStore creates a new MockStore and optionally pre-loads it with a
@@ -184,11 +177,11 @@ func (m *MockStore) FinishTask(taskID int) error {
 	return nil
 }
 
-// WriteLog records a log entry.
-func (m *MockStore) WriteLog(taskID int, level string, message string) error {
+// RecordError records an error message for a task.
+func (m *MockStore) RecordError(taskID int, errMsg string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.LogCalls = append(m.LogCalls, LogCall{taskID, level, message})
+	m.RecordErrors = append(m.RecordErrors, errMsg)
 	return nil
 }
 
@@ -300,16 +293,6 @@ func (m *MockStore) LastStatus() int {
 		return -1
 	}
 	return m.lastStatus
-}
-
-// LastLog returns the most recent log entry.
-func (m *MockStore) LastLog() LogCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.LogCalls) == 0 {
-		return LogCall{}
-	}
-	return m.LogCalls[len(m.LogCalls)-1]
 }
 
 // LastProgress returns the most recent progress call.

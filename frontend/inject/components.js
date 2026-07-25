@@ -97,43 +97,6 @@ const Icons = {
   },
 };
 
-function format_download_speed(bps) {
-  const kb = 1024,
-    mb = kb * 1024;
-  if (!bps) return "0 B/s";
-  if (bps >= mb) return (bps / mb).toFixed(2) + " MB/s";
-  if (bps >= kb) return (bps / kb).toFixed(2) + " KB/s";
-  return bps + " B/s";
-}
-function format_download_percent(t) {
-  const total = t.meta && t.meta.res ? t.meta.res.size : 0;
-  const cur = t.progress ? t.progress.downloaded : 0;
-  if (!total) return 0;
-  return Math.min(100, Math.floor((cur * 100) / total));
-}
-function get_name_of_download_task(t) {
-  if (t.meta && t.meta.opts && t.meta.opts.name) return t.meta.opts.name;
-  if (t.meta && t.meta.res) {
-    if (t.meta.res.name) return t.meta.res.name;
-    if (t.meta.res.files && t.meta.res.files.length > 0)
-      return t.meta.res.files[0].name;
-  }
-  return "unknown";
-}
-function total_speed(tasks) {
-  let sum = 0;
-  tasks.forEach((t) => {
-    if (
-      t.status === "running" &&
-      t.progress &&
-      typeof t.progress.speed === "number"
-    ) {
-      sum += t.progress.speed;
-    }
-  });
-  return sum;
-}
-
 function Popover(props, children) {
   const presence_state_ = refobj(props.store.presence.state);
   const was_exiting_ = ref(false);

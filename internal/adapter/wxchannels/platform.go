@@ -61,16 +61,17 @@ func (h *handler) BuildDownloadTask(contentJSON json.RawMessage, config registry
 		"spec":           spec,
 		"download_cover": config.DownloadCover,
 		"overwrite":      config.Overwrite,
-		"skip_duplicate": config.SkipDuplicate,
+		"duplicate":      config.Duplicate,
 		"source_url":     content.SourceURL,
 		"content_url":    content.ContentURL,
 		"cover_url":      coverURL,
 	})
 
 	videoResource := model.DownloadResource{
-		Name: title + ".mp4",
-		Kind: "video",
-		Size: content.Size,
+		Name:     title + ".mp4",
+		Kind:     "video",
+		Size:     content.Size,
+		UniqueID: content.ExternalId + "_" + spec,
 	}
 	videoEndpoint := model.DownloadEndpoint{
 		Protocol: "https",
@@ -81,13 +82,12 @@ func (h *handler) BuildDownloadTask(contentJSON json.RawMessage, config registry
 		Resource:  videoResource,
 		Endpoints: []model.DownloadEndpoint{videoEndpoint},
 	}}
-	resourceType := model.ResourceTypeFile
 	if config.DownloadCover && coverURL != "" {
-		resourceType = model.ResourceTypeCollection
 		resources = append(resources, registry.DownloadResourceInfo{
 			Resource: model.DownloadResource{
 				Name:       title + ".jpg",
 				Kind:       "cover",
+				UniqueID:   content.ExternalId + "_cover",
 				MergeOrder: 1,
 			},
 			Endpoints: []model.DownloadEndpoint{{
@@ -100,11 +100,10 @@ func (h *handler) BuildDownloadTask(contentJSON json.RawMessage, config registry
 
 	return &registry.DownloadInfo{
 		Task: model.DownloadTaskV1{
-			Name:         title,
-			ResourceType: resourceType,
-			Status:       model.TaskStatusWaiting,
-			SavePath:     savePath,
-			ConfigJSON:   string(configJSON),
+			Name:       title,
+			Status:     model.TaskStatusWaiting,
+			SavePath:   savePath,
+			ConfigJSON: string(configJSON),
 		},
 		Resource:  videoResource,
 		Endpoint:  videoEndpoint,

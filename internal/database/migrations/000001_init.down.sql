@@ -1,5 +1,3 @@
-DROP TABLE IF EXISTS `download_log`;
-DROP TABLE IF EXISTS `download_live`;
 DROP TABLE IF EXISTS `download_connection`;
 DROP TABLE IF EXISTS `download_segment`;
 DROP TABLE IF EXISTS `download_endpoint`;

@@ -123,7 +123,6 @@ func TestScenario_CollectionFallback(t *testing.T) {
 			ID:           1,
 			Name:         "fallback.bin",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			ResourceID:   101,
 			Endpoints: []hermes.Endpoint{
 				{ID: 1, Protocol: "failing", URL: "failing://primary", Priority: 0},
@@ -159,7 +158,6 @@ func TestScenario_HLSStream(t *testing.T) {
 			ID:           1,
 			Name:         "stream.mp4",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			ResourceID:   201,
 			Endpoints: []hermes.Endpoint{
 				{ID: 1, Protocol: "memory", URL: "memory://stream"},
@@ -197,7 +195,6 @@ func TestScenario_MultiSegmentConcurrent(t *testing.T) {
 			ID:           1,
 			Name:         "multi_seg.bin",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			ResourceID:   1,
 			URL:          srv.URL(),
 		}).
@@ -242,7 +239,6 @@ func TestScenario_SlowServerPauseResume(t *testing.T) {
 			ID:           1,
 			Name:         "pause_test.bin",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			URL:          srv.URL(),
 		}).
 		WithHTTPDriver()
@@ -260,7 +256,7 @@ func TestScenario_SlowServerPauseResume(t *testing.T) {
 	assert.Equal(t, 1, b.Store.DeactivateCalls)
 
 	// Resume: create a new engine with the same store and tracker.
-	engine2 := hermes.New(b.Store, b.Tracker.Record, 1)
+	engine2 := hermes.New(b.Store, nil, b.Tracker.Record, 1, "")
 	engine2.RegisterProtocol(&testHTTPDriver{})
 
 	require.NoError(t, engine2.Start(1))
@@ -302,7 +298,6 @@ func TestScenario_EmptyFile(t *testing.T) {
 			ID:           1,
 			Name:         "empty.bin",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			ResourceID:   1,
 			URL:          srv.URL(),
 		}).
@@ -331,7 +326,6 @@ func TestScenario_OneByteFile(t *testing.T) {
 			ID:           1,
 			Name:         "one.bin",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			Endpoints: []hermes.Endpoint{
 				{ID: 1, Protocol: "memory", URL: "memory://one.bin"},
 			},
@@ -368,7 +362,6 @@ func TestScenario_LargeFileHundredMB(t *testing.T) {
 			ID:           1,
 			Name:         "big.bin",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			ResourceID:   1,
 			URL:          srv.URL(),
 		}).
@@ -397,7 +390,6 @@ func TestScenario_EventSequence(t *testing.T) {
 			ID:           1,
 			Name:         "seq.bin",
 			SavePath:     saveDir,
-			ResourceType: hermes.ResourceTypeFile,
 			Endpoints: []hermes.Endpoint{
 				{ID: 1, Protocol: "memory", URL: "memory://seq.bin"},
 			},
@@ -444,7 +436,6 @@ func TestScenario_StoreErrorHandling(t *testing.T) {
 		ID:           1,
 		Name:         "err.bin",
 		SavePath:     saveDir,
-		ResourceType: hermes.ResourceTypeFile,
 		Endpoints: []hermes.Endpoint{
 			{ID: 1, Protocol: "memory", URL: "memory://err.bin"},
 		},

@@ -13,38 +13,38 @@ import (
 // DownloadTaskRecord 是下载任务的统一摘要结构。
 // REST 列表项和 WebSocket task 字段必须共同使用该结构。
 type DownloadTaskRecord struct {
-	ID           int                      `json:"id"`
-	Name         string                   `json:"name"`
-	ResourceType string                   `json:"resource_type"`
-	Status       int                      `json:"status"`
-	SavePath     string                   `json:"save_path"`
-	ConfigJSON   string                   `json:"config_json"`
-	URL          string                   `json:"url"`
-	Size         int64                    `json:"size"`
-	Downloaded   int64                    `json:"downloaded"`
-	Speed        int64                    `json:"speed"`
-	Progress     float64                  `json:"progress"`
-	Error        string                   `json:"error"`
-	Files        []DownloadTaskFileRecord `json:"files"`
-	FileCount    int                      `json:"file_count"`
-	CreatedAt    int64                    `json:"created_at"`
-	UpdatedAt    int64                    `json:"updated_at"`
+	ID         int                      `json:"id"`
+	Name       string                   `json:"name"`
+	Status     int                      `json:"status"`
+	SavePath   string                   `json:"save_path"`
+	ConfigJSON string                   `json:"config_json"`
+	URL        string                   `json:"url"`
+	Size       int64                    `json:"size"`
+	Downloaded int64                    `json:"downloaded"`
+	Speed      int64                    `json:"speed"`
+	Progress   float64                  `json:"progress"`
+	Error      string                   `json:"error"`
+	Files      []DownloadTaskFileRecord `json:"files"`
+	FileCount  int                      `json:"file_count"`
+	CreatedAt  int64                    `json:"created_at"`
+	UpdatedAt  int64                    `json:"updated_at"`
 }
 
 // DownloadTaskFileRecord 是 Task 下单个 Resource 的前端文件节点。
 type DownloadTaskFileRecord struct {
-	ID         int     `json:"id"`
-	Name       string  `json:"name"`
-	Kind       string  `json:"kind"`
-	Type       string  `json:"type"`
-	Status     string  `json:"status"`
-	Size       int64   `json:"size"`
-	Downloaded int64   `json:"downloaded"`
-	Speed      int64   `json:"speed"`
-	Progress   float64 `json:"progress"`
-	URL        string  `json:"url"`
-	OutputPath string  `json:"output_path"`
-	Error      string  `json:"error"`
+	ID           int     `json:"id"`
+	Name         string  `json:"name"`
+	Kind         string  `json:"kind"`
+	ResourceType string  `json:"resource_type"`
+	Type         string  `json:"type"`
+	Status       string  `json:"status"`
+	Size         int64   `json:"size"`
+	Downloaded   int64   `json:"downloaded"`
+	Speed        int64   `json:"speed"`
+	Progress     float64 `json:"progress"`
+	URL          string  `json:"url"`
+	OutputPath   string  `json:"output_path"`
+	Error        string  `json:"error"`
 }
 
 func taskProgressPercent(downloaded, total int64, status int) float64 {
@@ -114,17 +114,18 @@ func (c *APIClient) buildDownloadTaskRecords(tasks []model.DownloadTaskV1) ([]Do
 	}
 
 	type resourceInfo struct {
-		ID         int    `gorm:"column:id"`
-		TaskID     int    `gorm:"column:task_id"`
-		Name       string `gorm:"column:name"`
-		Kind       string `gorm:"column:kind"`
-		Size       int64  `gorm:"column:size"`
-		Status     int    `gorm:"column:status"`
-		MergeOrder int    `gorm:"column:merge_order"`
+		ID           int    `gorm:"column:id"`
+		TaskID       int    `gorm:"column:task_id"`
+		Name         string `gorm:"column:name"`
+		Kind         string `gorm:"column:kind"`
+		ResourceType string `gorm:"column:resource_type"`
+		Size         int64  `gorm:"column:size"`
+		Status       int    `gorm:"column:status"`
+		MergeOrder   int    `gorm:"column:merge_order"`
 	}
 	var resources []resourceInfo
 	if err := c.db.Table("download_resource").
-		Select("id, task_id, name, kind, size, status, merge_order").
+		Select("id, task_id, name, kind, resource_type, size, status, merge_order").
 		Where("task_id IN ? AND deleted_at IS NULL", taskIDs).
 		Order("task_id ASC, merge_order ASC, id ASC").
 		Scan(&resources).Error; err != nil {
@@ -184,17 +185,6 @@ func (c *APIClient) buildDownloadTaskRecords(tasks []model.DownloadTaskV1) ([]Do
 		speedByResource[aggregate.ResourceID] = aggregate.Speed
 	}
 
-	errorByTask := make(map[int]string, len(tasks))
-	var logs []model.DownloadLog
-	if err := c.db.Where("task_id IN ? AND level = ?", taskIDs, "error").Order("id DESC").Find(&logs).Error; err != nil {
-		return nil, err
-	}
-	for _, log := range logs {
-		if _, exists := errorByTask[log.TaskId]; !exists {
-			errorByTask[log.TaskId] = log.Message
-		}
-	}
-
 	for _, task := range tasks {
 		totalSize := sizeByTask[task.Id]
 		if totalSize <= 0 {
@@ -202,15 +192,12 @@ func (c *APIClient) buildDownloadTaskRecords(tasks []model.DownloadTaskV1) ([]Do
 		}
 		errorMessage := ""
 		if task.Status == model.TaskStatusFailed {
-			errorMessage = errorByTask[task.Id]
+			errorMessage = task.ErrorMessage
 		}
 		resourceRows := resourcesByTask[task.Id]
 		files := make([]DownloadTaskFileRecord, 0, len(resourceRows))
 		for _, resource := range resourceRows {
-			outputPath := task.SavePath
-			if task.ResourceType != model.ResourceTypeFile || filepath.Base(task.SavePath) != filepath.Base(resource.Name) {
-				outputPath = filepath.Join(task.SavePath, filepath.Base(resource.Name))
-			}
+			outputPath := filepath.Join(task.SavePath, filepath.Base(resource.Name))
 			status := "waiting"
 			switch resource.Status {
 			case 1:
@@ -231,25 +218,25 @@ func (c *APIClient) buildDownloadTaskRecords(tasks []model.DownloadTaskV1) ([]Do
 				}
 			}
 			files = append(files, DownloadTaskFileRecord{
-				ID:         resource.ID,
-				Name:       resource.Name,
-				Kind:       resource.Kind,
-				Type:       "file",
-				Status:     status,
-				Size:       resource.Size,
-				Downloaded: downloadedByResource[resource.ID],
-				Speed:      speedByResource[resource.ID],
-				Progress:   taskProgressPercent(downloadedByResource[resource.ID], resource.Size, mapResourceTaskStatus(resource.Status)),
-				URL:        urlByResource[resource.ID],
-				OutputPath: outputPath,
-				Error:      fileError,
+				ID:           resource.ID,
+				Name:         resource.Name,
+				Kind:         resource.Kind,
+				ResourceType: resource.ResourceType,
+				Type:         "file",
+				Status:       status,
+				Size:         resource.Size,
+				Downloaded:   downloadedByResource[resource.ID],
+				Speed:        speedByResource[resource.ID],
+				Progress:     taskProgressPercent(downloadedByResource[resource.ID], resource.Size, mapResourceTaskStatus(resource.Status)),
+				URL:          urlByResource[resource.ID],
+				OutputPath:   outputPath,
+				Error:        fileError,
 			})
 		}
 		records = append(records, DownloadTaskRecord{
-			ID:           task.Id,
-			Name:         task.Name,
-			ResourceType: task.ResourceType,
-			Status:       task.Status,
+			ID:     task.Id,
+			Name:   task.Name,
+			Status: task.Status,
 			SavePath:     task.SavePath,
 			ConfigJSON:   task.ConfigJSON,
 			URL:          urlByTask[task.Id],

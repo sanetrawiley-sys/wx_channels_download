@@ -165,13 +165,34 @@ class ErrorModal {
 window.errorModal = new ErrorModal();
 var errors = [];
 window.addEventListener("error", function (event) {
-  if (event.error === null) {
-    return;
-  }
   event.preventDefault();
-  var r = parse_error_stack(event.error.stack);
-  if (r) {
-    errors.push(r);
+  // 打印所有错误事件到控制台，方便用 DevTools 定位
+  console.error("[ERROR.js]", {
+    message: event.message,
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno,
+    error: event.error,
+    targetSrc: event.target && event.target.src,
+    targetTag: event.target && event.target.tagName,
+  });
+  if (event.error === null) {
+    // 跨域脚本错误 / 资源加载失败，浏览器隐藏了详细信息
+    var crossOriginInfo = {
+      type: "Script error",
+      msg: event.message || event.target
+        ? "Failed to load: " + (event.target.src || event.target.tagName)
+        : "No message (cross-origin sanitized)",
+      source: event.filename || event.target
+        ? event.target.src || event.target.tagName
+        : "Unknown",
+    };
+    errors.push(crossOriginInfo);
+  } else {
+    var r = parse_error_stack(event.error.stack);
+    if (r) {
+      errors.push(r);
+    }
   }
   if (errors.length) {
     var text = render_errors(errors);

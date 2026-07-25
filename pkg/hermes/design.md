@@ -23,11 +23,10 @@
 
 2. 核心模型
 
-整个系统只抽象三种资源。
+整个系统在 Resource 级别区分两种类型。
 
 Resource Type	描述	是否有限
 File	单个文件	✅
-Collection	文件集合（目录、多文件）	✅
 Stream	数据流（直播）	❌
 
 例如：
@@ -35,12 +34,6 @@ Stream	数据流（直播）	❌
 HTTP 下载
         ↓
       File
-FTP 文件夹
-        ↓
-   Collection
-BT
-        ↓
-   Collection
 HLS Live
         ↓
      Stream
@@ -48,6 +41,7 @@ RTMP
         ↓
      Stream
 
+Task 是纯容器，可以混合 File 和 Stream 资源。
 协议不是资源类型。
 
 ⸻
@@ -66,12 +60,12 @@ Task
 录制 Twitch
 Task
 
-Task 不关心协议。
+Task 不关心协议，也不关心资源类型。
 
 Task 只关心：
 
-* 下载什么
-* 保存哪里
+* 包含哪些资源（Resource）
+* 保存根目录
 * 当前状态
 
 ⸻
@@ -205,11 +199,10 @@ Scheduler 负责调度。
 
 download_task
 
-下载任务。
+下载任务（纯容器）。
 
 id
 name
-resource_type
 status
 save_path
 create_time
@@ -217,11 +210,9 @@ start_time
 finish_time
 config_json
 
-resource_type
-
-FILE
-COLLECTION
-STREAM
+Note：`resource_type` 和直播字段（`stream_url`、`record_start`、`record_end`、`duration`、
+`rotate_minutes`、`rotate_size`、`is_live`）已下沉到 `download_resource`。
+Task 的 `save_path` 始终是输出根目录，不再是完整文件路径。
 
 ⸻
 
@@ -233,9 +224,26 @@ id
 task_id
 name
 kind
+resource_type
 size
+downloaded
+speed
 status
 merge_order
+stream_url
+record_start
+record_end
+duration
+rotate_minutes
+rotate_size
+is_live
+start_time
+finish_time
+
+resource_type
+
+file
+stream
 
 kind
 
@@ -319,28 +327,6 @@ last_active
 * 多线程
 * 多连接
 * CDN
-
-⸻
-
-download_live
-
-直播信息。
-
-id
-task_id
-stream_url
-record_start
-record_end
-duration
-rotate_minutes
-rotate_size
-is_live
-
-支持：
-
-* 自动切片
-* 自动续录
-* 自动重连
 
 ⸻
 

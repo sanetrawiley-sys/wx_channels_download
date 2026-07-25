@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"wx_channel/internal/database/model"
 	"wx_channel/internal/download/registry"
 	scraper "wx_channel/pkg/scraper/wxchannels"
 )
@@ -42,7 +41,6 @@ func TestBuildDownloadTaskWithCoverCreatesMultipleResources(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, info)
-	assert.Equal(t, model.ResourceTypeCollection, info.Task.ResourceType)
 	require.Len(t, info.Resources, 2)
 	assert.Equal(t, "video", info.Resources[0].Resource.Kind)
 	assert.Equal(t, "自定义名称.mp4", info.Resources[0].Resource.Name)

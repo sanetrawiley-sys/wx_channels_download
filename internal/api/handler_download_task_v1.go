@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -38,7 +39,7 @@ type DownloadConfig struct {
 	Suffix        string `json:"suffix"`
 	DownloadCover bool   `json:"download_cover"`
 	Overwrite     bool   `json:"overwrite"`
-	SkipDuplicate bool   `json:"skip_duplicate"`
+	Duplicate bool   `json:"duplicate"`
 }
 
 // taskV1IDBody 通用 task_id 请求体
@@ -96,52 +97,18 @@ func (c *APIClient) resolveDownloadSaveDir(requested string) (string, error) {
 	return savePath, nil
 }
 
-// downloadTaskSavePath 根据资源类型生成任务最终保存路径。
-// FILE 保存完整文件路径，COLLECTION/STREAM 保存输出根目录。
-func downloadTaskSavePath(saveDir, resourceType, resourceName string) (string, error) {
-	if resourceType != model.ResourceTypeFile {
-		return saveDir, nil
-	}
-
-	filename := filepath.Base(strings.TrimSpace(resourceName))
-	if filename == "" || filename == "." || filename == ".." || filename == string(filepath.Separator) {
-		return "", fmt.Errorf("无法确定下载文件名")
-	}
-	return filepath.Join(saveDir, filename), nil
+// downloadTaskSavePath 返回任务保存根目录。
+func downloadTaskSavePath(saveDir string) string {
+	return saveDir
 }
 
-// startCreatedDownloadTask 补齐新建任务的连接记录并立即交给 Hermes 调度。
-func (c *APIClient) startCreatedDownloadTask(task *model.DownloadTaskV1, endpoints []model.DownloadEndpoint) error {
+// startCreatedDownloadTask 将新建任务交给 Hermes 调度。
+// Hermes 通过 Store 接口管理所有内部状态（连接、状态变更、日志）并通过 EventHandler 回调触发广播。
+func (c *APIClient) startCreatedDownloadTask(taskID int) error {
 	if c.downloader == nil {
 		return fmt.Errorf("Hermes 下载器未初始化")
 	}
-
-	now := time.Now().UnixMilli()
-	for _, endpoint := range endpoints {
-		host := ""
-		if parsedURL, err := url.Parse(endpoint.URL); err == nil {
-			host = parsedURL.Host
-		}
-		connection := model.DownloadConnection{
-			EndpointId: endpoint.Id,
-			WorkerId:   "worker-" + strconv.Itoa(endpoint.Id),
-			Host:       host,
-			Status:     1,
-			LastActive: now,
-		}
-		connection.CreatedAt = now
-		connection.UpdatedAt = now
-		if err := c.db.Create(&connection).Error; err != nil {
-			return fmt.Errorf("创建下载连接失败: %w", err)
-		}
-	}
-
-	if err := c.downloader.Start(task.Id); err != nil {
-		return err
-	}
-	task.Status = model.TaskStatusPreparing
-	c.broadcastDownloadTaskUpsert([]int{task.Id})
-	return nil
+	return c.downloader.Start(taskID)
 }
 
 // prepareDownloadTaskV1Single 预览单个平台下载任务（不写入数据库、不启动下载），返回将要创建的任务信息。
@@ -152,7 +119,7 @@ func (c *APIClient) prepareDownloadTaskV1Single(body CreateDownloadTaskV1Body) (
 
 	h := registry.Get(body.Platform)
 	if h == nil {
-		return nil, fmt.Errorf("不支持的平台: " + body.Platform)
+		return nil, fmt.Errorf("不支持的平台: %s", body.Platform)
 	}
 
 	saveDir, err := c.resolveDownloadSaveDir(body.Config.SavePath)
@@ -165,8 +132,8 @@ func (c *APIClient) prepareDownloadTaskV1Single(body CreateDownloadTaskV1Body) (
 		Filename:      body.Config.Filename,
 		Spec:          body.Config.Spec,
 		DownloadCover: body.Config.DownloadCover,
-		Overwrite:     body.Config.Overwrite,
-		SkipDuplicate: body.Config.SkipDuplicate,
+		Overwrite: body.Config.Overwrite,
+		Duplicate: body.Config.Duplicate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构建下载任务失败: %w", err)
@@ -182,19 +149,13 @@ func (c *APIClient) prepareDownloadTaskV1Single(body CreateDownloadTaskV1Body) (
 			Endpoints: []model.DownloadEndpoint{info.Endpoint},
 		}}
 	}
-	if len(resourceInfos) > 1 {
-		info.Task.ResourceType = model.ResourceTypeCollection
-	}
 	for _, resourceInfo := range resourceInfos {
 		if len(resourceInfo.Endpoints) == 0 {
-			return nil, fmt.Errorf("资源 " + resourceInfo.Resource.Name + " 没有下载端点")
+			return nil, fmt.Errorf("资源 %s 没有下载端点", resourceInfo.Resource.Name)
 		}
 	}
 
-	info.Task.SavePath, err = downloadTaskSavePath(saveDir, info.Task.ResourceType, resourceInfos[0].Resource.Name)
-	if err != nil {
-		return nil, fmt.Errorf("生成保存路径失败: %w", err)
-	}
+	info.Task.SavePath = downloadTaskSavePath(saveDir)
 
 	// 构建预览数据（不写入数据库）
 	resources := make([]gin.H, 0, len(resourceInfos))
@@ -219,10 +180,9 @@ func (c *APIClient) prepareDownloadTaskV1Single(body CreateDownloadTaskV1Body) (
 	tree := buildResourceTree(resources)
 
 	return gin.H{
-		"platform":        body.Platform,
-		"task_name":       info.Task.Name,
-		"resource_type":   info.Task.ResourceType,
-		"save_path":       info.Task.SavePath,
+		"platform":       body.Platform,
+		"task_name":      info.Task.Name,
+		"save_path":      info.Task.SavePath,
 		"resources":       resources,
 		"tree":            tree,
 		"resource_count":  len(resourceInfos),
@@ -301,17 +261,13 @@ func (c *APIClient) prepareDownloadTaskByURLV1Single(body CreateDownloadTaskByUR
 		return nil, fmt.Errorf("无法确定下载文件名")
 	}
 
-	savePath, err := downloadTaskSavePath(saveDir, model.ResourceTypeFile, filename)
-	if err != nil {
-		return nil, fmt.Errorf("生成保存路径失败: %w", err)
-	}
+	savePath := downloadTaskSavePath(saveDir)
 
 	return gin.H{
-		"url":           body.URL,
-		"protocol":      protocol,
-		"task_name":     filename,
-		"resource_type": model.ResourceTypeFile,
-		"save_path":     savePath,
+		"url":       body.URL,
+		"protocol":  protocol,
+		"task_name": filename,
+		"save_path": savePath,
 		"resources": []gin.H{{
 			"index": 0,
 			"name":  filename,
@@ -353,8 +309,132 @@ func (c *APIClient) handlePrepareDownloadTaskByURLV1(ctx *gin.Context) {
 	result.Ok(ctx, gin.H{"previews": previews})
 }
 
+// DuplicateTaskError 表示创建任务时发现已存在相同内容的下载任务。
+type DuplicateTaskError struct {
+	ExistingTaskID int
+}
+
+func (e *DuplicateTaskError) Error() string {
+	return "已存在该下载内容"
+}
+
+func (e *DuplicateTaskError) StatusCode() int {
+	return 409
+}
+
+// duplicateConflict 记录一个冲突信息。
+type duplicateConflict struct {
+	Type        string // "resource" | "file"
+	TaskID      int    // 冲突的任务 ID（仅 resource 类型）
+	FilePath    string // 冲突的文件路径（仅 file 类型）
+	ResourceKey string // 用于展示的冲突资源标识
+}
+
+// checkDuplicateV1 检查两类重复：
+// 1. 资源级重复 — 通过 resource.unique_id 查找未完成任务中是否已有相同资源
+// 2. 文件级重复 — 输出目录下已存在同名文件
+//
+// resourceKeys: 每个 resource 的 unique_id（长度与 resourceNames 一致）
+// duplicate:   允许重复下载，跳过冲突检查直接创建新任务
+// overwrite:   发现冲突时删除旧任务/文件，继续创建新任务
+// 默认:        返回 409 冲突
+func (c *APIClient) checkDuplicateV1(saveDir string, resourceKeys []string, resourceNames []string, duplicate bool, overwrite bool) (bool, gin.H, error) {
+	// 重复下载模式：允许重复创建，跳过冲突检查
+	if duplicate {
+		return false, nil, nil
+	}
+
+	var conflicts []duplicateConflict
+	var existingTaskID int
+
+	// 1. 资源级重复检查：通过 unique_id 查找未完成任务中引用了相同资源的记录
+	for i, key := range resourceKeys {
+		if key == "" {
+			continue
+		}
+		var dup model.DownloadResource
+		err := c.db.
+			Joins("JOIN download_task_v1 ON download_task_v1.id = download_resource.task_id").
+			Where("download_resource.unique_id = ?", key).
+			Where("download_task_v1.status NOT IN (?, ?, ?)", model.TaskStatusFinished, model.TaskStatusFailed, model.TaskStatusCancelled).
+			Where("download_task_v1.deleted_at IS NULL").
+			First(&dup).Error
+		if err == nil {
+			existingTaskID = dup.TaskId
+			conflicts = append(conflicts, duplicateConflict{
+				Type:        "resource",
+				TaskID:      dup.TaskId,
+				ResourceKey: resourceNames[i],
+			})
+		}
+	}
+
+	// 2. 文件级重复检查：检查输出文件是否已存在
+	for _, name := range resourceNames {
+		filePath := filepath.Join(saveDir, filepath.Base(name))
+		if fileInfo, err := os.Stat(filePath); err == nil && !fileInfo.IsDir() {
+			conflicts = append(conflicts, duplicateConflict{
+				Type:     "file",
+				FilePath: filePath,
+			})
+		}
+	}
+
+	// 无冲突，继续创建
+	if len(conflicts) == 0 {
+		return false, nil, nil
+	}
+
+	// 覆盖模式：清理冲突后继续创建
+	if overwrite {
+		for _, conflict := range conflicts {
+			switch conflict.Type {
+			case "resource":
+				if err := c.deleteTaskWithFiles(conflict.TaskID); err != nil {
+					return false, nil, fmt.Errorf("覆盖已存在任务失败: %w", err)
+				}
+			case "file":
+				if err := os.Remove(conflict.FilePath); err != nil && !os.IsNotExist(err) {
+					return false, nil, fmt.Errorf("覆盖已存在文件失败: %w", err)
+				}
+			}
+		}
+		return false, nil, nil // 继续创建新任务
+	}
+
+	// 默认：返回 409
+	errResp := &DuplicateTaskError{}
+	if existingTaskID > 0 {
+		errResp.ExistingTaskID = existingTaskID
+	}
+	return true, nil, errResp
+}
+
+// deleteTaskWithFiles 删除任务及其下载的物理文件。
+func (c *APIClient) deleteTaskWithFiles(taskID int) error {
+	var task model.DownloadTaskV1
+	if err := c.db.First(&task, taskID).Error; err != nil {
+		return fmt.Errorf("任务不存在: %w", err)
+	}
+
+	// 删除物理文件
+	if task.SavePath != "" {
+		os.RemoveAll(task.SavePath)
+	}
+
+	// 软删除任务（也会级联删除关联的 resources、endpoints）
+	return c.db.Model(&task).Updates(map[string]any{
+		"deleted_at": time.Now().UnixMilli(),
+	}).Error
+}
+
 // createDownloadTaskV1Single 创建单个平台下载任务，返回结果数据或错误。
 func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (gin.H, error) {
+	// 数据库未初始化
+	if c.db == nil {
+		return nil, fmt.Errorf("应用未初始化，数据库不可用")
+	}
+
 	if body.Platform == "" {
 		return nil, fmt.Errorf("platform 不能为空")
 	}
@@ -362,7 +442,7 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 	// 根据平台获取对应的处理器
 	h := registry.Get(body.Platform)
 	if h == nil {
-		return nil, fmt.Errorf("不支持的平台: " + body.Platform)
+		return nil, fmt.Errorf("不支持的平台: %s", body.Platform)
 	}
 
 	saveDir, err := c.resolveDownloadSaveDir(body.Config.SavePath)
@@ -376,8 +456,8 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 		Filename:      body.Config.Filename,
 		Spec:          body.Config.Spec,
 		DownloadCover: body.Config.DownloadCover,
-		Overwrite:     body.Config.Overwrite,
-		SkipDuplicate: body.Config.SkipDuplicate,
+		Overwrite: body.Config.Overwrite,
+		Duplicate: body.Config.Duplicate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构建下载任务失败: %w", err)
@@ -393,24 +473,26 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 			Endpoints: []model.DownloadEndpoint{info.Endpoint},
 		}}
 	}
-	if len(resourceInfos) > 1 {
-		info.Task.ResourceType = model.ResourceTypeCollection
-	}
 	for _, resourceInfo := range resourceInfos {
 		if len(resourceInfo.Endpoints) == 0 {
-			return nil, fmt.Errorf("资源 " + resourceInfo.Resource.Name + " 没有下载端点")
+			return nil, fmt.Errorf("资源 %s 没有下载端点", resourceInfo.Resource.Name)
 		}
 	}
 
-	// 保存路径由 API 统一生成，避免平台处理器使用各自的硬编码默认目录。
-	info.Task.SavePath, err = downloadTaskSavePath(saveDir, info.Task.ResourceType, resourceInfos[0].Resource.Name)
-	if err != nil {
-		return nil, fmt.Errorf("生成保存路径失败: %w", err)
-	}
+	// 保存路径由 API 统一生成，Task 的 SavePath 始终为目录。
+	info.Task.SavePath = downloadTaskSavePath(saveDir)
 
-	// 数据库未初始化
-	if c.db == nil {
-		return nil, fmt.Errorf("应用未初始化，数据库不可用")
+	// 检查重复：资源级（unique_id）和文件级（同名文件）
+	resourceKeys := make([]string, 0, len(resourceInfos))
+	resourceNames := make([]string, 0, len(resourceInfos))
+	for _, ri := range resourceInfos {
+		resourceKeys = append(resourceKeys, ri.Resource.UniqueID)
+		resourceNames = append(resourceNames, ri.Resource.Name)
+	}
+	if handled, resp, err := c.checkDuplicateV1(info.Task.SavePath, resourceKeys, resourceNames, body.Config.Duplicate, body.Config.Overwrite); err != nil {
+		return nil, err
+	} else if handled {
+		return resp, nil
 	}
 
 	// 写入数据库
@@ -455,9 +537,10 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 	info.Resource = resources[0]
 	info.Endpoint = endpoints[0]
 
-	if err := c.startCreatedDownloadTask(&info.Task, endpoints); err != nil {
+	if err := c.startCreatedDownloadTask(info.Task.Id); err != nil {
 		return nil, fmt.Errorf("启动下载任务失败: %w", err)
 	}
+	info.Task.Status = model.TaskStatusPreparing // Hermes 已写入 DB，此处仅更新内存变量供响应
 
 	return gin.H{
 		"task":      info.Task,
@@ -483,10 +566,20 @@ func (c *APIClient) handleCreateDownloadTaskV1(ctx *gin.Context) {
 		return
 	}
 
+	var duplicateErr *DuplicateTaskError
 	tasks := make([]gin.H, 0, len(req.Objects))
 	for _, body := range req.Objects {
 		data, err := c.createDownloadTaskV1Single(body)
 		if err != nil {
+			if errors.As(err, &duplicateErr) {
+				// 单个任务冲突：如果是单个请求则返回 409；批量请求中标记失败
+				if len(req.Objects) == 1 {
+					result.Err(ctx, duplicateErr.StatusCode(), duplicateErr.Error())
+					return
+				}
+				tasks = append(tasks, gin.H{"success": false, "error": err.Error(), "duplicate": true, "existing_task_id": duplicateErr.ExistingTaskID})
+				continue
+			}
 			tasks = append(tasks, gin.H{"success": false, "error": err.Error()})
 		} else {
 			tasks = append(tasks, gin.H{"success": true, "data": data})
@@ -541,10 +634,7 @@ func (c *APIClient) createDownloadTaskByURLV1Single(body CreateDownloadTaskByURL
 		return nil, fmt.Errorf("无法确定下载文件名")
 	}
 
-	savePath, err := downloadTaskSavePath(saveDir, model.ResourceTypeFile, filename)
-	if err != nil {
-		return nil, fmt.Errorf("生成保存路径失败: %w", err)
-	}
+	savePath := downloadTaskSavePath(saveDir)
 
 	taskName := filename
 
@@ -562,11 +652,10 @@ func (c *APIClient) createDownloadTaskByURLV1Single(body CreateDownloadTaskByURL
 
 	// 创建任务
 	task := model.DownloadTaskV1{
-		Name:         taskName,
-		ResourceType: model.ResourceTypeFile,
-		Status:       model.TaskStatusWaiting,
-		SavePath:     savePath,
-		ConfigJSON:   string(configJSON),
+		Name:       taskName,
+		Status:     model.TaskStatusWaiting,
+		SavePath:   savePath,
+		ConfigJSON: string(configJSON),
 	}
 	task.CreatedAt = now
 	task.UpdatedAt = now
@@ -607,9 +696,10 @@ func (c *APIClient) createDownloadTaskByURLV1Single(body CreateDownloadTaskByURL
 	}
 
 	// 交给调度器；任务先进入 PREPARING，获得并发槽位后再转为 DOWNLOADING。
-	if err := c.startCreatedDownloadTask(&task, []model.DownloadEndpoint{endpoint}); err != nil {
+	if err := c.startCreatedDownloadTask(task.Id); err != nil {
 		return nil, fmt.Errorf("启动下载任务失败: %w", err)
 	}
+	task.Status = model.TaskStatusPreparing // Hermes 已写入 DB，此处仅更新内存变量供响应
 
 	return gin.H{
 		"task":     task,
@@ -675,31 +765,12 @@ func (c *APIClient) handleStartDownloadTaskV1(ctx *gin.Context) {
 		return
 	}
 
-	// 获取端点 URL
-	var ep model.DownloadEndpoint
-	if err := c.db.Table("download_endpoint").
-		Where("resource_id IN (SELECT id FROM download_resource WHERE task_id = ?)", task.Id).
-		Order("priority ASC").First(&ep).Error; err != nil {
-		result.Err(ctx, 500, "未找到下载端点")
-		return
-	}
-
+	// Hermes 负责状态持久化、日志写入和事件广播。
 	if err := c.downloader.Start(task.Id); err != nil {
 		result.Err(ctx, 500, "启动下载任务失败: "+err.Error())
 		return
 	}
-
-	now := time.Now().UnixMilli()
 	task.Status = model.TaskStatusPreparing
-
-	c.db.Create(&model.DownloadLog{
-		TaskId:    task.Id,
-		Level:     "info",
-		Message:   "task started",
-		CreatedAt: now,
-	})
-
-	c.broadcastDownloadTaskUpsert([]int{task.Id})
 
 	result.Ok(ctx, gin.H{"task": task, "status_text": "preparing"})
 }
@@ -732,39 +803,9 @@ func (c *APIClient) handlePauseDownloadTaskV1(ctx *gin.Context) {
 		return
 	}
 
-	now := time.Now().UnixMilli()
-
-	// 暂停 Hermes 下载引擎
+	// Hermes 负责所有状态持久化（task/resource/segment/connection）、日志写入和事件广播。
 	c.downloader.Pause(task.Id)
-
-	// 暂停任务
-	c.db.Model(&task).Updates(map[string]any{
-		"status":     model.TaskStatusPaused,
-		"updated_at": now,
-	})
 	task.Status = model.TaskStatusPaused
-
-	// 暂停正在下载的 resources
-	c.db.Model(&model.DownloadResource{}).Where("task_id = ? AND status = 1", task.Id).
-		Updates(map[string]any{"status": 1, "updated_at": now})
-
-	// 暂停激活的 segments
-	c.db.Model(&model.DownloadSegment{}).Where("resource_id IN (SELECT id FROM download_resource WHERE task_id = ?) AND status = 1", task.Id).
-		Updates(map[string]any{"status": 1, "updated_at": now})
-
-	// 暂停 connections
-	c.db.Model(&model.DownloadConnection{}).
-		Where("endpoint_id IN (SELECT id FROM download_endpoint WHERE resource_id IN (SELECT id FROM download_resource WHERE task_id = ?))", task.Id).
-		Updates(map[string]any{"status": 2, "speed": 0, "last_active": now, "updated_at": now})
-
-	c.db.Create(&model.DownloadLog{
-		TaskId:    task.Id,
-		Level:     "info",
-		Message:   "task paused",
-		CreatedAt: now,
-	})
-
-	c.broadcastDownloadTaskUpsert([]int{task.Id})
 
 	result.Ok(ctx, gin.H{"task": task, "status_text": "paused"})
 }
@@ -797,22 +838,12 @@ func (c *APIClient) handleResumeDownloadTaskV1(ctx *gin.Context) {
 		return
 	}
 
-	now := time.Now().UnixMilli()
-
+	// Hermes 负责状态持久化、日志写入和事件广播。
 	if err := c.downloader.Start(task.Id); err != nil {
 		result.Err(ctx, 500, "恢复下载任务失败: "+err.Error())
 		return
 	}
 	task.Status = model.TaskStatusPreparing
-
-	c.db.Create(&model.DownloadLog{
-		TaskId:    task.Id,
-		Level:     "info",
-		Message:   "task resumed",
-		CreatedAt: now,
-	})
-
-	c.broadcastDownloadTaskUpsert([]int{task.Id})
 
 	result.Ok(ctx, gin.H{"task": task, "status_text": "preparing"})
 }
@@ -842,17 +873,11 @@ func (c *APIClient) handleDeleteDownloadTaskV1(ctx *gin.Context) {
 
 	now := time.Now().UnixMilli()
 
-	// 停止 Hermes 下载引擎任务
+	// Hermes 停止下载作业、设置 Cancelled 状态、写入日志。
 	c.downloader.Delete(task.Id)
-
-	// 先标记 task 为取消状态，再软删除
-	c.db.Model(&task).Updates(map[string]any{
-		"status":     model.TaskStatusCancelled,
-		"updated_at": now,
-	})
 	deletedRecord, _ := c.buildDownloadTaskRecord(task.Id)
 
-	// 软删除 task
+	// 软删除 task（Hermes 已写入 Cancelled 状态）
 	c.db.Model(&task).Update("deleted_at", now)
 
 	// 级联软删除关联数据
@@ -870,13 +895,6 @@ func (c *APIClient) handleDeleteDownloadTaskV1(ctx *gin.Context) {
 			c.db.Model(&model.DownloadConnection{}).Where("endpoint_id IN ?", endpointIDs).Update("deleted_at", now)
 		}
 	}
-
-	c.db.Create(&model.DownloadLog{
-		TaskId:    task.Id,
-		Level:     "info",
-		Message:   "task deleted",
-		CreatedAt: now,
-	})
 
 	if deletedRecord != nil {
 		c.broadcastDownloadTaskDelete([]DownloadTaskRecord{*deletedRecord})
@@ -1009,4 +1027,147 @@ func buildResourceTree(resources []gin.H) *ResourceTreeNode {
 		}
 	}
 	return root
+}
+
+// handleStartAllDownloadTaskV1 批量启动下载任务
+// POST /api/v1/download_task/start_all
+func (c *APIClient) handleStartAllDownloadTaskV1(ctx *gin.Context) {
+	if c.db == nil {
+		result.Err(ctx, 500, "应用未初始化，数据库不可用")
+		return
+	}
+
+	var body struct {
+		Status string `json:"status"`
+	}
+	ctx.ShouldBindJSON(&body)
+
+	query := c.db.Where("deleted_at IS NULL")
+	switch body.Status {
+	case "waiting":
+		query = query.Where("status = ?", model.TaskStatusWaiting)
+	case "paused":
+		query = query.Where("status = ?", model.TaskStatusPaused)
+	case "failed":
+		query = query.Where("status = ?", model.TaskStatusFailed)
+	default:
+		// 启动所有可启动的
+		query = query.Where("status IN (?, ?, ?)",
+			model.TaskStatusWaiting, model.TaskStatusPaused, model.TaskStatusFailed)
+	}
+
+	var tasks []model.DownloadTaskV1
+	if err := query.Find(&tasks).Error; err != nil {
+		result.Err(ctx, 500, "查询下载任务失败: "+err.Error())
+		return
+	}
+
+	var started int
+	for _, task := range tasks {
+		if err := c.downloader.Start(task.Id); err != nil {
+			continue
+		}
+		started++
+	}
+
+	result.Ok(ctx, gin.H{"started": started, "total": len(tasks)})
+}
+
+// handlePauseAllDownloadTaskV1 批量暂停下载任务
+// POST /api/v1/download_task/pause_all
+func (c *APIClient) handlePauseAllDownloadTaskV1(ctx *gin.Context) {
+	if c.db == nil {
+		result.Err(ctx, 500, "应用未初始化，数据库不可用")
+		return
+	}
+
+	var body struct {
+		Status string `json:"status"`
+	}
+	ctx.ShouldBindJSON(&body)
+
+	query := c.db.Where("deleted_at IS NULL")
+	switch body.Status {
+	case "preparing":
+		query = query.Where("status = ?", model.TaskStatusPreparing)
+	case "downloading":
+		query = query.Where("status = ?", model.TaskStatusDownloading)
+	case "running":
+		query = query.Where("status IN (?, ?)",
+			model.TaskStatusPreparing, model.TaskStatusDownloading)
+	default:
+		query = query.Where("status IN (?, ?)",
+			model.TaskStatusPreparing, model.TaskStatusDownloading)
+	}
+
+	var tasks []model.DownloadTaskV1
+	if err := query.Find(&tasks).Error; err != nil {
+		result.Err(ctx, 500, "查询下载任务失败: "+err.Error())
+		return
+	}
+
+	var paused int
+	for _, task := range tasks {
+		c.downloader.Pause(task.Id)
+		paused++
+	}
+
+	result.Ok(ctx, gin.H{"paused": paused, "total": len(tasks)})
+}
+
+// handleClearDownloadTaskV1 清理已完成/失败/已取消的下载任务
+// POST /api/v1/download_task/clear
+func (c *APIClient) handleClearDownloadTaskV1(ctx *gin.Context) {
+	if c.db == nil {
+		result.Err(ctx, 500, "应用未初始化，数据库不可用")
+		return
+	}
+
+	var body struct {
+		DeleteFiles bool `json:"delete_files"`
+	}
+	ctx.ShouldBindJSON(&body)
+
+	var tasks []model.DownloadTaskV1
+	if err := c.db.Where("deleted_at IS NULL").
+		Where("status IN (?, ?, ?)",
+			model.TaskStatusFinished, model.TaskStatusFailed, model.TaskStatusCancelled).
+		Find(&tasks).Error; err != nil {
+		result.Err(ctx, 500, "查询下载任务失败: "+err.Error())
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	var cleared int
+
+	for _, task := range tasks {
+		c.downloader.Delete(task.Id)
+
+		// 软删除 task
+		c.db.Model(&task).Update("deleted_at", now)
+
+		// 级联软删除关联数据
+		c.db.Model(&model.DownloadResource{}).Where("task_id = ?", task.Id).Update("deleted_at", now)
+
+		var resourceIDs []int
+		c.db.Model(&model.DownloadResource{}).Where("task_id = ?", task.Id).Pluck("id", &resourceIDs)
+		if len(resourceIDs) > 0 {
+			c.db.Model(&model.DownloadEndpoint{}).Where("resource_id IN ?", resourceIDs).Update("deleted_at", now)
+			c.db.Model(&model.DownloadSegment{}).Where("resource_id IN ?", resourceIDs).Update("deleted_at", now)
+
+			var endpointIDs []int
+			c.db.Model(&model.DownloadEndpoint{}).Where("resource_id IN ?", resourceIDs).Pluck("id", &endpointIDs)
+			if len(endpointIDs) > 0 {
+				c.db.Model(&model.DownloadConnection{}).Where("endpoint_id IN ?", endpointIDs).Update("deleted_at", now)
+			}
+		}
+
+		if body.DeleteFiles && task.SavePath != "" {
+			os.RemoveAll(task.SavePath)
+		}
+
+		cleared++
+	}
+
+	result.Ok(ctx, gin.H{"cleared": cleared})
 }

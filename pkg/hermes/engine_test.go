@@ -35,19 +35,13 @@ type mockTaskStore struct {
 	segmentInfo     []Segment
 	deactivateCalls int
 	finishCalls     int
-	logCalls        []logCall
+	recordErrors    []string
 }
 
 type progressCall struct {
 	taskID     int
 	downloaded int64
 	speed      int64
-}
-
-type logCall struct {
-	taskID  int
-	level   string
-	message string
 }
 
 func (m *mockTaskStore) LoadTask(taskID int) (*Task, error) {
@@ -106,9 +100,9 @@ func (m *mockTaskStore) FinishTask(taskID int) error {
 	return nil
 }
 
-func (m *mockTaskStore) WriteLog(taskID int, level string, message string) error {
+func (m *mockTaskStore) RecordError(taskID int, errMsg string) error {
 	m.mu.Lock()
-	m.logCalls = append(m.logCalls, logCall{taskID, level, message})
+	m.recordErrors = append(m.recordErrors, errMsg)
 	m.mu.Unlock()
 	return nil
 }
@@ -140,15 +134,6 @@ func (m *mockTaskStore) lastStatus() int {
 		return -1
 	}
 	return m.statusCalls[len(m.statusCalls)-1]
-}
-
-func (m *mockTaskStore) lastLog() logCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.logCalls) == 0 {
-		return logCall{}
-	}
-	return m.logCalls[len(m.logCalls)-1]
 }
 
 func (m *mockTaskStore) outputNameUpdates() []OutputNameUpdate {
@@ -318,33 +303,29 @@ func (t *eventTracker) waitFor(event EventType, timeout time.Duration) bool {
 
 func TestEngineInfersExtensionFromContentTypeBeforeWriting(t *testing.T) {
 	store := &mockTaskStore{}
-	engine := New(store, nil, 1)
+	engine := New(store, nil, nil, 1, "")
 	saveDir := t.TempDir()
 	task := &Task{
-		ID:           1,
-		ResourceID:   2,
-		Name:         "cover",
-		SavePath:     filepath.Join(saveDir, "cover"),
-		ResourceType: ResourceTypeFile,
+		ID:         1,
+		ResourceID: 2,
+		Name:       "cover",
+		SavePath:   saveDir,
 	}
 
 	changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"})
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, "cover.png", task.Name)
-	assert.Equal(t, filepath.Join(saveDir, "cover.png"), task.SavePath)
 	assert.Equal(t, []OutputNameUpdate{{
 		TaskID:       1,
 		ResourceID:   2,
 		ResourceName: "cover.png",
-		TaskName:     "cover.png",
-		SavePath:     task.SavePath,
 	}}, store.outputNameUpdates())
 }
 
 func TestEngineDoesNotGuessExtensionForKnownNamesOrUnknownMIMETypes(t *testing.T) {
 	store := &mockTaskStore{}
-	engine := New(store, nil, 1)
+	engine := New(store, nil, nil, 1, "")
 	for _, testCase := range []struct {
 		name        string
 		contentType string
@@ -353,7 +334,7 @@ func TestEngineDoesNotGuessExtensionForKnownNamesOrUnknownMIMETypes(t *testing.T
 		{name: "video", contentType: "application/octet-stream"},
 		{name: "playlist", contentType: "application/vnd.apple.mpegurl"},
 	} {
-		task := &Task{ID: 1, ResourceID: 2, Name: testCase.name, SavePath: filepath.Join(t.TempDir(), testCase.name), ResourceType: ResourceTypeFile}
+		task := &Task{ID: 1, ResourceID: 2, Name: testCase.name, SavePath: filepath.Join(t.TempDir(), testCase.name)}
 		changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: testCase.contentType})
 		require.NoError(t, err)
 		assert.False(t, changed, testCase)
@@ -364,13 +345,12 @@ func TestEngineDoesNotGuessExtensionForKnownNamesOrUnknownMIMETypes(t *testing.T
 
 func TestEngineDoesNotRenameResumedResource(t *testing.T) {
 	store := &mockTaskStore{segmentInfo: []Segment{{ID: 1, Size: 8, Downloaded: 2}}}
-	engine := New(store, nil, 1)
+	engine := New(store, nil, nil, 1, "")
 	task := &Task{
 		ID:           1,
 		ResourceID:   2,
 		Name:         "cover",
-		SavePath:     filepath.Join(t.TempDir(), "cover"),
-		ResourceType: ResourceTypeFile,
+		SavePath: filepath.Join(t.TempDir(), "cover"),
 	}
 
 	changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"})
@@ -384,14 +364,13 @@ func TestEngineInfersExtensionForLongFilenames(t *testing.T) {
 	for _, length := range []int{100, 200, 300} {
 		t.Run(fmt.Sprintf("%d_characters", length), func(t *testing.T) {
 			store := &mockTaskStore{}
-			engine := New(store, nil, 1)
+			engine := New(store, nil, nil, 1, "")
 			name := strings.Repeat("a", length)
 			task := &Task{
 				ID:           1,
 				ResourceID:   2,
 				Name:         name,
-				SavePath:     filepath.Join(t.TempDir(), name),
-				ResourceType: ResourceTypeFile,
+				SavePath: filepath.Join(t.TempDir(), name),
 			}
 
 			changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"})
@@ -414,9 +393,8 @@ func TestEngine_RetriesEndpointPreparation(t *testing.T) {
 	store := &mockTaskStore{taskInfo: &Task{
 		ID:           1,
 		Name:         "retry.bin",
-		SavePath:     t.TempDir(),
-		ResourceType: ResourceTypeFile,
-		ResourceID:   1,
+		SavePath:   t.TempDir(),
+		ResourceID: 1,
 		Endpoints: []Endpoint{{
 			ID:       1,
 			Protocol: "flaky-prepare",
@@ -424,7 +402,7 @@ func TestEngine_RetriesEndpointPreparation(t *testing.T) {
 		}},
 	}}
 	tracker := &eventTracker{}
-	engine := New(store, tracker.record, 1)
+	engine := New(store, nil, tracker.record, 1, "")
 	engine.RegisterProtocol(driver)
 
 	if err := engine.Start(1); err != nil {
@@ -446,14 +424,13 @@ func TestEngine_DownloadsCollectionResources(t *testing.T) {
 		ID:           1,
 		Name:         "video.bin",
 		SavePath:     saveDir,
-		ResourceType: ResourceTypeCollection,
 		Resources: []Resource{
 			{ID: 11, Name: "video.bin", Endpoints: []Endpoint{{Protocol: "memory", URL: "memory://video"}}},
 			{ID: 12, Name: "cover.jpg", Endpoints: []Endpoint{{Protocol: "memory", URL: "memory://cover"}}},
 		},
 	}}
 	tracker := &eventTracker{}
-	engine := New(store, tracker.record, 1)
+	engine := New(store, nil, tracker.record, 1, "")
 	engine.RegisterProtocol(&memoryProtocolDriver{data: data})
 
 	if err := engine.Start(1); err != nil {
@@ -499,7 +476,7 @@ func TestEngine_DownloadWithProgress(t *testing.T) {
 	// event tracker
 	tracker := &eventTracker{}
 
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 	d.RegisterProtocol(&testHTTPDriver{})
 
 	// 启动下载
@@ -572,7 +549,7 @@ func TestEngine_FileSmallerThanBuffer(t *testing.T) {
 	}
 
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 	d.RegisterProtocol(&testHTTPDriver{})
 
 	if err := d.Start(1); err != nil {
@@ -601,7 +578,7 @@ func TestEngine_EmptyFile(t *testing.T) {
 		ID: 1, Name: "empty.bin", SavePath: filepath.Join(tmpDir, "downloads"), URL: ts.URL, ResourceID: 1,
 	}}
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 	d.RegisterProtocol(&testHTTPDriver{})
 	if err := d.Start(1); err != nil {
 		t.Fatal(err)
@@ -650,7 +627,7 @@ func TestEngine_ConcurrencyLimit(t *testing.T) {
 
 	// 启动多个下载任务验证并发限制不阻塞
 	for i := 0; i < 3; i++ {
-		d := New(stores[i], trackers[i].record, 3)
+		d := New(stores[i], nil, trackers[i].record, 3, "")
 		d.RegisterProtocol(&testHTTPDriver{})
 		if err := d.Start(i + 1); err != nil {
 			t.Fatalf("启动任务 %d 失败: %v", i+1, err)
@@ -689,7 +666,7 @@ func TestEngine_PauseAndResume(t *testing.T) {
 	}
 
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 	d.RegisterProtocol(&testHTTPDriver{})
 
 	if err := d.Start(1); err != nil {
@@ -713,7 +690,7 @@ func TestEngine_PauseAndResume(t *testing.T) {
 	assert.Equal(t, 1, store.deactivateCalls, "暂停时应调用 DeactivateConnections")
 
 	// 恢复
-	d2 := New(store, tracker.record, 1)
+	d2 := New(store, nil, tracker.record, 1, "")
 	d2.RegisterProtocol(&testHTTPDriver{})
 	if err := d2.Start(1); err != nil {
 		t.Fatalf("恢复失败: %v", err)
@@ -730,7 +707,7 @@ func TestEngine_LoadTaskError(t *testing.T) {
 		loadTaskErr: errors.New("load error"),
 	}
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 
 	if err := d.Start(1); err != nil {
 		t.Fatalf("Start 不应返回错误: %v", err)
@@ -742,11 +719,7 @@ func TestEngine_LoadTaskError(t *testing.T) {
 
 	assert.Contains(t, tracker.snapshot(), EventFailed)
 	assert.Equal(t, TaskStatusFailed, store.lastStatus())
-	assert.Equal(t, logCall{
-		taskID:  1,
-		level:   "error",
-		message: "加载任务信息失败: load error",
-	}, store.lastLog())
+	assert.Equal(t, []string{"加载任务信息失败: load error"}, store.recordErrors)
 }
 
 func TestEngine_EventSequence(t *testing.T) {
@@ -772,7 +745,7 @@ func TestEngine_EventSequence(t *testing.T) {
 	}
 
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 	d.RegisterProtocol(&testHTTPDriver{})
 
 	if err := d.Start(1); err != nil {
@@ -836,7 +809,7 @@ func TestEngine_MultiSegmentConcurrent(t *testing.T) {
 	}
 
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 10)
+	d := New(store, nil, tracker.record, 10, "")
 	d.RegisterProtocol(&testHTTPDriver{})
 
 	if err := d.Start(1); err != nil {
@@ -909,7 +882,7 @@ func TestEngine_ServerWithoutRangeUsesSingleDownload(t *testing.T) {
 		ID: 1, Name: "no-range.bin", SavePath: saveDir, URL: ts.URL, ResourceID: 1,
 	}}
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 	d.RegisterProtocol(&testHTTPDriver{})
 	if err := d.Start(1); err != nil {
 		t.Fatalf("启动下载失败: %v", err)
@@ -946,9 +919,8 @@ func TestTaskFilePathCannotEscapeSaveDirectory(t *testing.T) {
 	assert.Equal(t, filepath.Join("/downloads", "video.mp4"), path)
 
 	path, err = taskFilePath(&Task{
-		Name:         "video.mp4",
-		SavePath:     filepath.Join("/downloads", "video.mp4"),
-		ResourceType: "FILE",
+		Name:     "video.mp4",
+		SavePath: "/downloads",
 	}, "https://example.com/ignored")
 	assert.NoError(t, err)
 	assert.Equal(t, filepath.Join("/downloads", "video.mp4"), path)
@@ -974,7 +946,7 @@ func TestEngine_RegisteredProtocolAndEndpointFallback(t *testing.T) {
 		},
 	}}
 	tracker := &eventTracker{}
-	d := New(store, tracker.record, 1)
+	d := New(store, nil, tracker.record, 1, "")
 	d.RegisterProtocol(&failingProtocolDriver{size: int64(len(data))})
 	d.RegisterProtocol(&memoryProtocolDriver{data: data})
 

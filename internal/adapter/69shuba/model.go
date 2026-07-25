@@ -105,10 +105,9 @@ func BuildDownloadTask(novel *NovelDetail, config registry.DownloadConfig) (*reg
 
 	return &registry.DownloadInfo{
 		Task: model.DownloadTaskV1{
-			Name:         title,
-			ResourceType: model.ResourceTypeCollection,
-			Status:       model.TaskStatusWaiting,
-			SavePath:     savePath,
+			Name:     title,
+			Status:   model.TaskStatusWaiting,
+			SavePath: savePath,
 		},
 		Resource:  primary.Resource,
 		Endpoint:  primary.Endpoints[0],

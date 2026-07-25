@@ -1,6 +1,6 @@
 module wx_channel
 
-go 1.24.1
+go 1.25
 
 exclude (
 	github.com/andybalholm/brotli v1.2.0
@@ -29,7 +29,7 @@ require (
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.15.1
-	github.com/dop251/goja v0.0.0-20260106131823-651366fbe6e3
+	github.com/dop251/goja v0.0.0-20260723142020-b4aef50fa347
 	github.com/ebitengine/oto/v3 v3.2.0-alpha.4
 	github.com/fatih/color v1.16.0
 	github.com/gin-gonic/gin v1.9.1
@@ -105,6 +105,7 @@ require (
 	github.com/containerd/console v1.0.5 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dlclark/regexp2 v1.11.4 // indirect
+	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.3 // indirect

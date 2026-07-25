@@ -200,11 +200,12 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 				html = scriptHrefReg.ReplaceAllString(html, `href="$1.js`+v+`"`)
 
 				var injected strings.Builder
+				crossoriginAttr := ` crossorigin="anonymous"`
 				if cfg.DebugShowError {
 					/** 全局错误捕获并展示弹窗 */
-					frontend.AppendScriptSrcs(&injected, "", frontend.InjectAssetURL(assetBaseURL, "error.js"))
+					frontend.AppendScriptSrcs(&injected, crossoriginAttr, frontend.InjectAssetURL(assetBaseURL, "error.js"))
 				}
-				frontend.AppendSharedLibAssets(&injected, assetBaseURL, version, "", "")
+				frontend.AppendSharedLibAssets(&injected, assetBaseURL, version, crossoriginAttr, "")
 				frontend.AppendStylesheetHrefs(&injected, "", frontend.InjectAssetURL(assetBaseURL, "components.css"))
 				cfg_byte, _ := json.Marshal(cfg)
 				frontend.AppendInlineScript(&injected, "", fmt.Sprintf(`var __wx_channels_config__ = %s; var __wx_channels_version__ = "%s";`, string(cfg_byte), version))
@@ -213,50 +214,58 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 				frontend.AppendInlineScript(&injected, "", fmt.Sprintf(`var WXVariable = %s;`, string(variable_byte)))
 				frontend.AppendScriptSrcs(
 					&injected,
-					"",
+					crossoriginAttr,
 					frontend.InjectAssetURL(assetBaseURL, "eventbus.js"),
 					frontend.InjectAssetURL(assetBaseURL, "env.js"),
 					frontend.InjectAssetURL(assetBaseURL, "utils.js"),
 					frontend.InjectAssetURL(assetBaseURL, "components.js"),
 					frontend.InjectAssetURL(assetBaseURL, "virtual-list-view.js"),
+				)
+				if cfg.PagespyEnabled {
+					frontend.AppendScriptSrcs(
+						&injected,
+						crossoriginAttr,
+						frontend.ChannelLibAssetURL(assetBaseURL, version, "pagespy.min.js"),
+						frontend.InjectAssetURL(assetBaseURL, "pagespy.js"),
+					)
+				}
+				frontend.AppendScriptSrcs(
+					&injected,
+					crossoriginAttr,
+					ChannelInjectAssetURL(assetBaseURL, "channels.events.js"),
 					ChannelInjectAssetURL(assetBaseURL, "channels.env.js"),
 					ChannelInjectAssetURL(assetBaseURL, "channels.utils.js"),
 					ChannelInjectAssetURL(assetBaseURL, "channels.ws.js"),
 				)
 				frontend.AppendScriptSrcs(
 					&injected,
-					"",
+					crossoriginAttr,
 					frontend.InjectAssetURL(assetBaseURL, "download/core.js"),
 					frontend.InjectAssetURL(assetBaseURL, "download/panel.js"),
 				)
 				if cfg.InjectGlobalScript != "" {
 					frontend.AppendInlineScript(&injected, "", cfg.InjectGlobalScript)
 				}
-				// 必须放在 JSUtils 后面
-				if cfg.PagespyEnabled {
-					/** 在线调试 */
-					frontend.AppendScriptSrcs(&injected, "", frontend.ChannelLibAssetURL(assetBaseURL, version, "pagespy.min.js"), frontend.InjectAssetURL(assetBaseURL, "pagespy.js"))
-				}
 				if pathname == "/web/pages/home" {
-					frontend.AppendScriptSrcs(&injected, "", ChannelInjectAssetURL(assetBaseURL, "channels.home.js"))
+					frontend.AppendScriptSrcs(&injected, crossoriginAttr, ChannelInjectAssetURL(assetBaseURL, "channels.home.js"))
 					if cfg.InjectExtraScriptAfterJSMain != "" {
 						frontend.AppendInlineScript(&injected, "", cfg.InjectExtraScriptAfterJSMain)
 					}
 				}
 				if pathname == "/web/pages/feed" {
-					frontend.AppendScriptSrcs(&injected, "", ChannelInjectAssetURL(assetBaseURL, "channels.feed.js"))
+					frontend.AppendScriptSrcs(&injected, crossoriginAttr, ChannelInjectAssetURL(assetBaseURL, "channels.feed.js"))
 					if cfg.InjectExtraScriptAfterJSMain != "" {
 						frontend.AppendInlineScript(&injected, "", cfg.InjectExtraScriptAfterJSMain)
 					}
 				}
 				if pathname == "/web/pages/live" {
-					frontend.AppendScriptSrcs(&injected, "", ChannelInjectAssetURL(assetBaseURL, "channels.live.js"))
+					frontend.AppendScriptSrcs(&injected, crossoriginAttr, ChannelInjectAssetURL(assetBaseURL, "channels.live.js"))
 					if cfg.InjectExtraScriptAfterJSMain != "" {
 						frontend.AppendInlineScript(&injected, "", cfg.InjectExtraScriptAfterJSMain)
 					}
 				}
 				if pathname == "/web/pages/profile" {
-					frontend.AppendScriptSrcs(&injected, "", ChannelInjectAssetURL(assetBaseURL, "channels.profile.js"))
+					frontend.AppendScriptSrcs(&injected, crossoriginAttr, ChannelInjectAssetURL(assetBaseURL, "channels.profile.js"))
 					if cfg.InjectExtraScriptAfterJSMain != "" {
 						frontend.AppendInlineScript(&injected, "", cfg.InjectExtraScriptAfterJSMain)
 					}
@@ -297,7 +306,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 					})();
 					var data = result.data;
 					// console.log("before Init", data);
-					WXU.emit(WXU.Events.Init, data);
+					WXU.emit("channels:Init", data);
 					return result;
 				}async`
 						js_script = jsInitReg.ReplaceAllString(js_script, js_init)
@@ -309,7 +318,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 					})();
 					var feeds = result.data.object;
 					// console.log("before PCFlowLoaded", result.data);
-					WXU.emit(WXU.Events.PCFlowLoaded, feeds);
+					WXU.emit("channels:PCFlowLoaded", feeds);
 					return result;
 				}async`
 						js_script = jsPCFlowReg.ReplaceAllString(js_script, js_pc_flow)
@@ -321,7 +330,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 					})();
 					var feeds = result.data.object;
 					// console.log("before RecommendFeedsLoaded", result.data);
-					WXU.emit(WXU.Events.RecommendFeedsLoaded, feeds);
+					WXU.emit("channels:RecommendFeedsLoaded", feeds);
 					return result;
 				}async`
 						js_script = jsRecommendFeedsReg.ReplaceAllString(js_script, js_recommend_feeds)
@@ -333,7 +342,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 					})();
 					var feed = result.data.object;
 					// console.log("before FeedProfileLoaded", result.data);
-					WXU.emit(WXU.Events.FeedProfileLoaded, feed);
+					WXU.emit("channels:OnFeedProfileLoaded", feed);
 					return result;
 				}async`
 						js_script = jsFeedProfileReg.ReplaceAllString(js_script, js_feed_profile)
@@ -344,7 +353,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 						$2;
 					})();
 					// console.log("before CommentListLoaded", result.data, $1);
-					WXU.emit(WXU.Events.FeedCommentListLoaded, result.data);
+					WXU.emit("channels:FeedCommentListLoaded", result.data);
 					return result;
 				}async`
 						js_script = jsCommentListReg.ReplaceAllString(js_script, js_comment_list)
@@ -388,7 +397,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 						})();
 						var feeds = result.data.object;
 						// console.log("before finderGetInteractionedFeedList", result, $1);
-						WXU.emit(WXU.Events.InteractionedFeedsLoaded, feeds);
+						WXU.emit("channels:InteractionedFeedsLoaded", feeds);
 						return result;
 					}}const`
 						js_script = jsFinderGetInteractionedFeedListReg.ReplaceAllString(js_script, js_finder_interactioned)
@@ -400,7 +409,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 						})();
 						var data = result.data.object;
 						// console.log("before finderGetFeedH5Url", result, $1);
-						WXU.emit(WXU.Events.GetFeedH5Url, data);
+						WXU.emit("channels:GetFeedH5Url", data);
 						return result;
 					}}const`
 						js_script = jsFinderGetFeedH5Url.ReplaceAllString(js_script, js_finder_feed_h5_url)
@@ -412,7 +421,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 					})();
 					var feeds = result.data.object;
 					// console.log("before UserFeedsLoaded", result.data, $1);
-					WXU.emit(WXU.Events.UserFeedsLoaded, feeds);
+					WXU.emit("channels:UserFeedsLoaded", feeds);
 					return result;
 				}async`
 						js_script = jsUserFeedsReg.ReplaceAllString(js_script, js_user_feed)
@@ -424,7 +433,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 						})();
 						var feeds = result.data.object;
 						// console.log("before LiveUserFeedsLoaded", result.data, $1);
-						WXU.emit(WXU.Events.LiveUserFeedsLoaded, feeds);
+						WXU.emit("channels:LiveUserFeedsLoaded", feeds);
 						return result;
 					}async`
 						js_script = jsLiveFeedListReg.ReplaceAllString(js_script, js_live_feed_list)
@@ -436,7 +445,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 					})();
 					var live = result.data;
 					// console.log("before LiveProfileLoaded", result.data);
-					WXU.emit(WXU.Events.LiveProfileLoaded, live);
+					WXU.emit("channels:OnLiveProfileLoaded", live);
 					return result;
 				}async`
 						js_script = jsLiveInfoReg.ReplaceAllString(js_script, js_live_profile)
@@ -448,7 +457,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 					})();
 					var data = result.data;
 					// console.log("before JoinLive", data);
-					WXU.emit(WXU.Events.JoinLive, data);
+					WXU.emit("channels:JoinLive", data);
 					return result;
 				}async`
 						js_script = jsJoinLiveReg.ReplaceAllString(js_script, js_join_live)
@@ -478,7 +487,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 							}
 						}
 						api_methods_escaped := strings.ReplaceAll(api_methods, "$", "$$")
-						js_wxapi := ";WXU.emit(WXU.Events.APILoaded," + api_methods_escaped + ");export{"
+						js_wxapi := `;console.log("before WXU.emit channels:APILoaded", WXU);WXU.emit("channels:APILoaded",` + api_methods_escaped + `);export{`
 						js_script = jsExportReg.ReplaceAllString(js_script, js_wxapi)
 					}
 					ctx.SetResponseBody(js_script)
@@ -499,7 +508,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 						}
 						var feed = %[1]s.value.feeds[%[1]s.value.currentFeedIndex];
 						// console.log("before GotoNextFeed", %[1]s, feed);
-						WXU.emit(WXU.Events.GotoNextFeed, feed);
+						WXU.emit("channels:GotoNextFeed", feed);
 					}`, flow_list_variable_name)
 						js_script = jsGoToNextFlowReg.ReplaceAllString(js_script, js_go_next_feed)
 					}
@@ -512,12 +521,12 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 						}
 						var feed = %[1]s.value.feeds[%[1]s.value.currentFeedIndex];
 						// console.log("before GotoPrevFeed", %[1]s, feed);
-						WXU.emit(WXU.Events.GotoPrevFeed, feed);
+						WXU.emit("channels:GotoPrevFeed", feed);
 					}`, flow_list_variable_name)
 						js_script = jsGoToPrevFlowReg.ReplaceAllString(js_script, js_go_prev_feed)
 					}
 					{
-						js_wxutil := ";WXU.emit(WXU.Events.UtilsLoaded,{decodeBase64ToUint64String:decodeBase64ToUint64String,createAdapterFromGlobalMapper:createAdapterFromGlobalMapper,finderJoinLiveMapper:finderJoinLiveMapper});export{"
+						js_wxutil := `;WXU.emit("channels:UtilsLoaded",{decodeBase64ToUint64String:decodeBase64ToUint64String,createAdapterFromGlobalMapper:createAdapterFromGlobalMapper,finderJoinLiveMapper:finderJoinLiveMapper});export{`
 						js_script = jsExportReg.ReplaceAllString(js_script, js_wxutil)
 					}
 					{
@@ -532,7 +541,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 							return;
 						}
 						var feed = %[1]s.value.feeds[%[1]s.value.currentFeedIndex];
-						WXU.emit(WXU.Events.HomeFeedChanged, feed);
+						WXU.emit("channels:HomeFeedChanged", feed);
 					}`, local_feed_list_variable_name)
 						js_script = jsLoadLocalPlaylistReg.ReplaceAllString(js_script, js_load_local)
 					}
@@ -604,9 +613,10 @@ func CreateSimpleChannelInterceptorPlugin(cfg *InterceptorConfig, files *fronten
 				html = scriptSrcReg.ReplaceAllString(html, `src="$1.js`+v+`"`)
 				html = scriptHrefReg.ReplaceAllString(html, `href="$1.js`+v+`"`)
 				var injected strings.Builder
+			crossoriginAttr := ` crossorigin="anonymous"`
 				if pathname == "/web/pages/feed" || pathname == "/web/pages/home" {
 					/** 核心逻辑 */
-					frontend.AppendScriptSrcs(&injected, "", ChannelInjectAssetURL(assetBaseURL, "channels.home.js"))
+					frontend.AppendScriptSrcs(&injected, crossoriginAttr, ChannelInjectAssetURL(assetBaseURL, "channels.home.js"))
 				}
 				html = strings.Replace(html, "<head>", "<head>\n"+injected.String(), 1)
 				ctx.SetResponseBody(html)

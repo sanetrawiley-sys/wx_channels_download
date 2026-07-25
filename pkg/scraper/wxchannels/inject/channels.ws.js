@@ -63,9 +63,13 @@ async function fetchFeedProfileWith(data) {
         data.eid = eid;
       }
     } else {
-      var u = new URL(decodeURIComponent(data.url));
-      data.oid = WXU.API.decodeBase64ToUint64String(u.searchParams.get("oid"));
-      data.nid = WXU.API.decodeBase64ToUint64String(u.searchParams.get("nid"));
+      try {
+        var u = new URL(decodeURIComponent(data.url), window.location.origin);
+        data.oid = WXU.API.decodeBase64ToUint64String(u.searchParams.get("oid"));
+        data.nid = WXU.API.decodeBase64ToUint64String(u.searchParams.get("nid"));
+      } catch (parseErr) {
+        return [new Error("failed to parse feed URL: " + parseErr.message), null];
+      }
     }
   }
   let payload = {

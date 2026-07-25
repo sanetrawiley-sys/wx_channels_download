@@ -738,21 +738,17 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 	})
 	tmpTaskId := 1
 	task := model.DownloadTaskV1{
-		Id:           tmpTaskId,
-		Name:         title,
-		ResourceType: model.ResourceTypeFile,
-		Status:       model.TaskStatusWaiting,
-		SavePath:     "/downloads/wx_channels",
-		ConfigJSON:   string(configJSON),
+		Id:         tmpTaskId,
+		Name:       title,
+		Status:     model.TaskStatusWaiting,
+		SavePath:   "/downloads/wx_channels",
+		ConfigJSON: string(configJSON),
 	}
 	if task.Id != 1 {
 		t.Errorf("task.Id = %d, want 1", task.Id)
 	}
 	if task.Name != "讨厌我有什么用 有本事弄死我" {
 		t.Errorf("task.Name = %q", task.Name)
-	}
-	if task.ResourceType != model.ResourceTypeFile {
-		t.Errorf("task.ResourceType = %q, want %q", task.ResourceType, model.ResourceTypeFile)
 	}
 	if task.Status != model.TaskStatusWaiting {
 		t.Errorf("task.Status = %v, want %v", task.Status, model.TaskStatusWaiting)
@@ -855,7 +851,10 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 	}
 
 	tenPercent := resource.Size / 10
-	logs := make([]model.DownloadLog, 0, 4)
+	type logEntry struct {
+		Message string
+	}
+	logs := make([]logEntry, 0, 4)
 
 	// Stage 1: 开始下载 → Preparing → Downloading
 	t.Run("Stage1_StartDownloading", func(t *testing.T) {
@@ -866,8 +865,7 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 
 		task.Status = model.TaskStatusDownloading
 		conn.Status = 1
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "download started",
 		})
 
@@ -892,8 +890,7 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 		resource.Status = 1
 		segment.Status = 1
 		conn.Status = 2
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "download paused at 10%",
 		})
 
@@ -919,8 +916,7 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 		task.Status = model.TaskStatusDownloading
 		conn.Status = 1
 		conn.Speed = 2 * 1024 * 1024 // 2 MB/s
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "download resumed",
 		})
 
@@ -958,8 +954,7 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 
 		task.Status = model.TaskStatusFinished
 		resource.Status = 2
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "download finished",
 		})
 
@@ -979,12 +974,6 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 	for i, l := range logs {
 		if !strings.Contains(l.Message, expectedLogLevels[i]) {
 			t.Errorf("log[%d].Message = %q, should contain %q", i, l.Message, expectedLogLevels[i])
-		}
-		if l.TaskId != task.Id {
-			t.Errorf("log[%d].TaskId = %d, want %d", i, l.TaskId, task.Id)
-		}
-		if l.Level != "info" {
-			t.Errorf("log[%d].Level = %q, want %q", i, l.Level, "info")
 		}
 	}
 
@@ -1053,12 +1042,11 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 		"spec":        spec,
 	})
 	task := model.DownloadTaskV1{
-		Id:           taskId,
-		Name:         content.Title,
-		ResourceType: model.ResourceTypeFile,
-		Status:       model.TaskStatusWaiting,
-		SavePath:     "/downloads/wx_channels",
-		ConfigJSON:   string(taskConfig),
+		Id:         taskId,
+		Name:       content.Title,
+		Status:     model.TaskStatusWaiting,
+		SavePath:   "/downloads/wx_channels",
+		ConfigJSON: string(taskConfig),
 	}
 
 	// ---- Create three V1 DownloadResources (one per file type) ----
@@ -1125,9 +1113,6 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 	}
 	if task.Name != content.Title {
 		t.Errorf("task.Name = %q, want %q", task.Name, content.Title)
-	}
-	if task.ResourceType != model.ResourceTypeFile {
-		t.Errorf("task.ResourceType = %q, want %q", task.ResourceType, model.ResourceTypeFile)
 	}
 	if task.Status != model.TaskStatusWaiting {
 		t.Errorf("task.Status = %v, want %v", task.Status, model.TaskStatusWaiting)
@@ -1205,7 +1190,7 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 	t.Logf("=== Multi-file Download Tree (V1) ===")
 	t.Logf("Account  : %s (%s)", account.Nickname, account.ExternalId)
 	t.Logf("Content  : %s | %s | %d bytes | %ds", content.Title, content.ContentType, content.Size, content.Duration)
-	t.Logf("Task     : id=%d name=%q type=%s -> Content(%s) via DownloadTaskId", task.Id, task.Name, task.ResourceType, content.Id)
+	t.Logf("Task     : id=%d name=%q -> Content(%s) via DownloadTaskId", task.Id, task.Name, content.Id)
 	for i, r := range resources {
 		t.Logf("  ├── resource[%d] id=%d kind=%s size=%d", i, r.Id, r.Kind, r.Size)
 		t.Logf("  │   └── endpoint[%d] id=%d protocol=%s", i, endpoints[i].Id, endpoints[i].Protocol)
@@ -1237,7 +1222,10 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 			IP: "183.60.15.102", Speed: 0, Bytes: 0, Status: 0, LastActive: 0},
 	}
 
-	logs := make([]model.DownloadLog, 0, 5)
+	type logEntry struct {
+		Message string
+	}
+	logs := make([]logEntry, 0, 5)
 
 	// Stage 1: 所有资源开始下载
 	t.Run("Stage1_MultiStartDownloading", func(t *testing.T) {
@@ -1253,8 +1241,7 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 		for i := range segments {
 			segments[i].Status = 1
 		}
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "multi-file download started (video+cover+audio)",
 		})
 
@@ -1296,8 +1283,7 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 		connections[0].Status = 2
 		resources[0].Status = 1
 
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "download paused at video 10%, cover completed, audio partial",
 		})
 
@@ -1333,8 +1319,7 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 		resources[2].Status = 2
 		connections[2].Status = 0
 
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "all resources resumed and fully downloaded",
 		})
 
@@ -1369,8 +1354,7 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 		}
 
 		task.Status = model.TaskStatusFinished
-		logs = append(logs, model.DownloadLog{
-			Id: len(logs) + 1, TaskId: task.Id, Level: "info",
+		logs = append(logs, logEntry{
 			Message: "multi-file download finished and merged",
 		})
 
@@ -1391,9 +1375,6 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 	for i, l := range logs {
 		if !strings.Contains(l.Message, expectedKeywords[i]) {
 			t.Errorf("log[%d].Message = %q, should contain %q", i, l.Message, expectedKeywords[i])
-		}
-		if l.TaskId != task.Id {
-			t.Errorf("log[%d].TaskId = %d, want %d", i, l.TaskId, task.Id)
 		}
 	}
 

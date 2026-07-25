@@ -275,33 +275,6 @@ func (c *Config) LoadConfig() error {
 		HotReload:   true,
 	})
 	Register(ConfigItem{
-		Key:         "channels.disableLocationToHome",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否禁止从视频号详情页重定向到首页（视频号默认行为）",
-		Title:       "禁止重定向",
-		Group:       "Channels",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "channel.disableLocationToHome",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否禁止从视频号详情页重定向到首页（视频号默认行为）",
-		Title:       "禁止重定向",
-		Group:       "Channels",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "channels.refreshInterval",
-		Type:        ConfigTypeInt,
-		Default:     0,
-		Description: "视频号页面定时刷新时间间隔（秒），0 为不刷新",
-		Title:       "定时刷新间隔",
-		Group:       "Channels",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
 		Key:         "inject.extraScript.afterJSMain",
 		Type:        ConfigTypeString,
 		Default:     "",
@@ -487,150 +460,7 @@ func (c *Config) LoadConfig() error {
 		Title:       "Admin 服务端口",
 		Group:       "Admin",
 	})
-	Register(ConfigItem{
-		Key:         "mp.enabled",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否启用公众号本地服务，本地服务会提供接口、RSS 等功能",
-		Title:       "启用本地服务",
-		Group:       "OfficialAccount",
-		Deprecated:  true,
-	})
-	Register(ConfigItem{
-		Key:         "mp.remoteServer.protocol",
-		Type:        ConfigTypeString,
-		Default:     "http",
-		Description: "公众号远端服务协议头",
-		Title:       "服务协议头",
-		Group:       "OfficialAccount",
-	})
-	Register(ConfigItem{
-		Key:         "mp.remoteServer.hostname",
-		Type:        ConfigTypeString,
-		Default:     "",
-		Description: "公众号远端服务主机名",
-		Title:       "服务主机名",
-		Group:       "OfficialAccount",
-	})
-	Register(ConfigItem{
-		Key:         "mp.remoteServer.port",
-		Type:        ConfigTypeInt,
-		Default:     80,
-		Description: "公众号远端服务端口",
-		Title:       "服务端口",
-		Group:       "OfficialAccount",
-	})
-	Register(ConfigItem{
-		Key:         "mp.refreshToken",
-		Type:        ConfigTypeString,
-		Default:     "",
-		Description: "公众号远端服务刷新凭证",
-		Title:       "刷新凭证",
-		Group:       "OfficialAccount",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "mp.tokenFilepath",
-		Type:        ConfigTypeString,
-		Default:     "",
-		Description: "公众号远端服务授权凭证",
-		Title:       "授权凭证",
-		Group:       "OfficialAccount",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "mp.accountIdsRefreshInterval",
-		Type:        ConfigTypeText,
-		Default:     []string{},
-		Description: "需要定时刷新的帐号列表",
-		Title:       "定时刷新列表",
-		Group:       "OfficialAccount",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "mp.refreshSkipMinutes",
-		Type:        ConfigTypeInt,
-		Default:     20,
-		Description: "刷新时若账号在最近 N 分钟已更新则跳过",
-		Title:       "刷新跳过时间（分钟）",
-		Group:       "OfficialAccount",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "zhihu.enabled",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否记录知乎页面浏览记录",
-		Title:       "记录知乎浏览",
-		Group:       "Zhihu",
-	})
-	Register(ConfigItem{
-		Key:         "zhihu.cookie",
-		Type:        ConfigTypeText,
-		Default:     "",
-		Description: "知乎请求 Cookie，用于访问需要登录态的知乎接口",
-		Title:       "知乎 Cookie",
-		Group:       "Zhihu",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "69shuba.cookie",
-		Type:        ConfigTypeText,
-		Default:     "",
-		Description: "69书吧请求 Cookie，用于访问 Cloudflare 验证后的页面",
-		Title:       "69书吧 Cookie",
-		Group:       "69shuba",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "69shuba.fetcher",
-		Type:        ConfigTypeSelect,
-		Default:     "clawreq",
-		Options:     []string{"clawreq", "http", "cdp", "sandbox"},
-		Description: "69书吧 HTML 抓取方式，clawreq 使用浏览器指纹 HTTP client，http 使用 Go client，cdp 使用 CDP 服务地址，sandbox 使用 webarchive 沙箱浏览器 API",
-		Title:       "69书吧抓取方式",
-		Group:       "69shuba",
-	})
-	Register(ConfigItem{
-		Key:         "69shuba.cdpEndpoint",
-		Type:        ConfigTypeString,
-		Default:     "http://127.0.0.1:9222",
-		Description: "CDP 服务地址，仅 fetcher=cdp 时使用；可以是本机浏览器或容器暴露的 CDP HTTP/WS 地址",
-		Title:       "69书吧 CDP 地址",
-		Group:       "69shuba",
-	})
-	Register(ConfigItem{
-		Key:         "69shuba.cdpTimeout",
-		Type:        ConfigTypeInt,
-		Default:     30,
-		Description: "69书吧 CDP 单次页面抓取超时时间（秒）",
-		Title:       "69书吧 CDP 超时",
-		Group:       "69shuba",
-	})
-	Register(ConfigItem{
-		Key:         "69shuba.cdpWait",
-		Type:        ConfigTypeInt,
-		Default:     8,
-		Description: "69书吧 CDP 页面加载完成后的额外等待时间（秒），用于等待 Cloudflare 跳转",
-		Title:       "69书吧 CDP 等待",
-		Group:       "69shuba",
-	})
-	Register(ConfigItem{
-		Key:         "69shuba.sandboxAPIBaseURL",
-		Type:        ConfigTypeString,
-		Default:     "http://127.0.0.1:2021/api/v1",
-		Description: "webarchive 风格沙箱 API 地址，仅 fetcher=sandbox 时使用",
-		Title:       "69书吧沙箱 API",
-		Group:       "69shuba",
-	})
-	Register(ConfigItem{
-		Key:         "69shuba.sandboxID",
-		Type:        ConfigTypeString,
-		Default:     "",
-		Description: "用于抓取 69书吧页面的沙箱 ID，仅 fetcher=sandbox 时使用",
-		Title:       "69书吧沙箱 ID",
-		Group:       "69shuba",
-	})
+
 	Register(ConfigItem{
 		Key:         "sandbox.dockerImage",
 		Type:        ConfigTypeString,
@@ -718,74 +548,6 @@ func (c *Config) LoadConfig() error {
 		Description: "浏览器沙箱容器启动命令，留空时自动查找 Chrome/Chromium 并启用 0.0.0.0:9222 remote debugging",
 		Title:       "Chrome 启动命令",
 		Group:       "Sandbox",
-	})
-	Register(ConfigItem{
-		Key:         "xiaohongshu.enabled",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否记录小红书页面浏览记录",
-		Title:       "记录小红书浏览",
-		Group:       "Xiaohongshu",
-	})
-	Register(ConfigItem{
-		Key:         "bilibili.enabled",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否记录 B 站页面浏览记录",
-		Title:       "记录 B 站浏览",
-		Group:       "Bilibili",
-	})
-	Register(ConfigItem{
-		Key:         "bilibili.cookie",
-		Type:        ConfigTypeText,
-		Default:     "",
-		Description: "B 站请求 Cookie，用于访问账号可看的高清清晰度；不会输出到日志",
-		Title:       "B 站 Cookie",
-		Group:       "Bilibili",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "youtube.enabled",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否记录 YouTube 页面浏览记录",
-		Title:       "记录 YouTube 浏览",
-		Group:       "YouTube",
-	})
-	Register(ConfigItem{
-		Key:         "youtube.cookie",
-		Type:        ConfigTypeText,
-		Default:     "",
-		Description: "YouTube 请求 Cookie，用于访问需要登录态的视频；不会输出到日志",
-		Title:       "YouTube Cookie",
-		Group:       "YouTube",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "youtube.poToken",
-		Type:        ConfigTypeText,
-		Default:     "",
-		Description: "YouTube GVS PO Token，兼容 yt-dlp 的 client.gvs+TOKEN 格式；用于避免部分 videoplayback 403",
-		Title:       "YouTube PO Token",
-		Group:       "YouTube",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "weibo.enabled",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否记录微博页面浏览记录",
-		Title:       "记录微博浏览",
-		Group:       "Weibo",
-	})
-	Register(ConfigItem{
-		Key:         "weibo.cookie",
-		Type:        ConfigTypeText,
-		Default:     "",
-		Description: "微博请求 Cookie，用于访问需要登录态的微博列表接口；不会输出到日志",
-		Title:       "微博 Cookie",
-		Group:       "Weibo",
-		HotReload:   true,
 	})
 	Register(ConfigItem{
 		Key:         "cloudflare.accountId",
@@ -909,6 +671,9 @@ func (c *Config) LoadConfig() error {
 			}
 		}
 	}
+
+	// Load plugin configs: each plugin declares its schema and reads its own config
+	LoadPluginConfigs()
 
 	c.DBType = viper.GetString("db.type")
 	c.DBHost = viper.GetString("db.host")

@@ -91,7 +91,7 @@ func NewScenario(maxConcurrent int) *ScenarioBuilder {
 		Tracker: &EventTracker{},
 	}
 	b.Store = NewMockStore(nil)
-	b.Engine = hermes.New(b.Store, b.Tracker.Record, maxConcurrent)
+	b.Engine = hermes.New(b.Store, nil, b.Tracker.Record, maxConcurrent, "")
 	return b
 }
 
@@ -182,9 +182,6 @@ func taskFilePath(info *hermes.Task, endpointURL string) (string, error) {
 	if name == "" || name == "." || name == ".." {
 		return "", fmt.Errorf("无法确定下载文件名")
 	}
-	if info.ResourceType == hermes.ResourceTypeFile && filepath.Base(info.SavePath) == name {
-		return info.SavePath, nil
-	}
 	return filepath.Join(info.SavePath, name), nil
 }
 
@@ -198,7 +195,6 @@ func SingleFileHTTPTask(id int, name string, saveDir string, url string) *hermes
 		ID:           id,
 		Name:         name,
 		SavePath:     saveDir,
-		ResourceType: hermes.ResourceTypeFile,
 		ResourceID:   id * 100,
 		URL:          url,
 	}
@@ -207,12 +203,11 @@ func SingleFileHTTPTask(id int, name string, saveDir string, url string) *hermes
 // CollectionTask creates a Task with multiple resources.
 func CollectionTask(id int, saveDir string, resources ...hermes.Resource) *hermes.Task {
 	return &hermes.Task{
-		ID:           id,
-		Name:         "collection",
-		SavePath:     saveDir,
-		ResourceType: hermes.ResourceTypeCollection,
-		ResourceID:   0,
-		Resources:    resources,
+		ID:        id,
+		Name:      "collection",
+		SavePath:  saveDir,
+		ResourceID: 0,
+		Resources: resources,
 	}
 }
 

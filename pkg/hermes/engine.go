@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dop251/goja"
 )
 
 // EventType 下载器事件类型。
@@ -67,21 +69,22 @@ type Endpoint struct {
 // Task 下载器需要的任务信息（由外部通过 LoadTask 提供）。
 // URL 和 ResourceID 保留用于兼容旧的 store；新实现优先使用 Endpoints。
 type Task struct {
-	ID           int
-	Name         string
-	SavePath     string
-	ResourceType string
-	URL          string
-	ResourceID   int
-	Endpoints    []Endpoint
-	Resources    []Resource
+	ID               int
+	Name             string
+	SavePath         string
+	FilenameTemplate string
+	URL              string
+	ResourceID       int
+	Endpoints        []Endpoint
+	Resources        []Resource
 }
 
 // Resource 是 Task 中可独立下载的文件资源。
 type Resource struct {
-	ID        int
-	Name      string
-	Endpoints []Endpoint
+	ID           int
+	Name         string
+	ResourceType string // "FILE" | "STREAM"
+	Endpoints    []Endpoint
 }
 
 // SegmentRange 是协议无关的有限字节范围，两端均包含。
@@ -101,6 +104,14 @@ type Segment struct {
 	OffsetEnd   int64
 	Size        int64
 	Downloaded  int64
+}
+
+// Logger is a simple structured logging interface used by Engine
+// for lifecycle messages. Nil means no-op.
+type Logger interface {
+	Info(format string, args ...interface{})
+	Warn(format string, args ...interface{})
+	Error(format string, args ...interface{})
 }
 
 // EventHandler 接收任务生命周期和进度事件。
@@ -151,7 +162,7 @@ type Store interface {
 	UpdateResourceSize(taskID int, size int64) error
 	DeactivateConnections(taskID int) error
 	FinishTask(taskID int) error
-	WriteLog(taskID int, level string, message string) error
+	RecordError(taskID int, errMsg string) error
 	CreateSegments(resourceID int, url string, ranges []SegmentRange) ([]int, error)
 	LoadSegmentInfo(resourceID int) ([]Segment, error)
 	UpdateSegmentProgress(segID int, downloaded int64) error
@@ -184,13 +195,15 @@ type OutputNameStore interface {
 // Engine 是协议无关的有限资源下载调度器。
 // FILE 和 COLLECTION 由同一任务调度，STREAM 由录制调度器处理。
 type Engine struct {
-	mu            sync.Mutex
-	maxConcurrent int
-	sem           chan struct{}
-	jobs          map[int]*job
-	store         Store
-	onEvent       EventHandler
-	drivers       map[string]ProtocolDriver
+	mu               sync.Mutex
+	maxConcurrent    int
+	sem              chan struct{}
+	jobs             map[int]*job
+	store            Store
+	logger           Logger
+	onEvent          EventHandler
+	drivers          map[string]ProtocolDriver
+	filenameTemplate string
 }
 
 type cancellationReason uint8
@@ -225,17 +238,19 @@ func (j *job) cancellationReason() cancellationReason {
 	return j.reason
 }
 
-func New(store Store, onEvent EventHandler, maxConcurrent int) *Engine {
+func New(store Store, logger Logger, onEvent EventHandler, maxConcurrent int, filenameTemplate string) *Engine {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 3
 	}
 	d := &Engine{
-		maxConcurrent: maxConcurrent,
-		sem:           make(chan struct{}, maxConcurrent),
-		jobs:          make(map[int]*job),
-		store:         store,
-		onEvent:       onEvent,
-		drivers:       make(map[string]ProtocolDriver),
+		maxConcurrent:    maxConcurrent,
+		sem:              make(chan struct{}, maxConcurrent),
+		jobs:             make(map[int]*job),
+		store:            store,
+		logger:           logger,
+		onEvent:          onEvent,
+		drivers:          make(map[string]ProtocolDriver),
+		filenameTemplate: filenameTemplate,
 	}
 	return d
 }
@@ -284,6 +299,8 @@ func (d *Engine) Start(taskID int) error {
 		close(job.done)
 		return fmt.Errorf("更新准备状态失败: %w", err)
 	}
+	d.emit(taskID, EventCreated)
+	d.logInfo("task %d started", taskID)
 	go d.schedule(taskID, job)
 	return nil
 }
@@ -312,11 +329,14 @@ func (d *Engine) PauseAll() {
 	}
 }
 
-// Delete 停止执行实例。数据库实体的取消和删除仍由 API handler 负责。
+// Delete 停止执行实例并标记任务为取消状态。
+// 数据库实体的软删除仍由 API handler 负责。
 func (d *Engine) Delete(taskID int) {
 	if job := d.findJob(taskID); job != nil {
 		job.stop(cancelDelete)
 		<-job.done
+		_ = d.store.UpdateStatus(taskID, TaskStatusCancelled)
+		d.logInfo("task %d deleted", taskID)
 		d.emit(taskID, EventDeleted)
 	}
 }
@@ -382,9 +402,6 @@ func (d *Engine) run(taskID int, ctx context.Context) error {
 	if info == nil {
 		return errors.New("加载任务信息失败: task is nil")
 	}
-	if info.ResourceType != "" && info.ResourceType != ResourceTypeFile && info.ResourceType != ResourceTypeCollection {
-		return fmt.Errorf("Hermes 暂不支持资源类型 %s", info.ResourceType)
-	}
 	resources := info.Resources
 	if len(resources) == 0 {
 		endpoints := info.Endpoints
@@ -407,7 +424,7 @@ func (d *Engine) run(taskID int, ctx context.Context) error {
 
 	filePaths := make([]string, 0, len(resources))
 	for _, resource := range resources {
-		filePath, err := d.downloadResource(ctx, taskID, info.SavePath, info.ResourceType, resource)
+		filePath, err := d.downloadResource(ctx, taskID, info.SavePath, resource.ResourceType, resource)
 		if err != nil {
 			return fmt.Errorf("资源 %s 下载失败: %w", resource.Name, err)
 		}
@@ -418,12 +435,12 @@ func (d *Engine) run(taskID int, ctx context.Context) error {
 
 func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath string, resourceType string, resource Resource) (string, error) {
 	resourceTask := &Task{
-		ID:           taskID,
-		Name:         resource.Name,
-		SavePath:     savePath,
-		ResourceType: resourceType,
-		ResourceID:   resource.ID,
-		Endpoints:    resource.Endpoints,
+		ID:               taskID,
+		Name:             resource.Name,
+		SavePath:         savePath,
+		FilenameTemplate: d.filenameTemplate,
+		ResourceID:       resource.ID,
+		Endpoints:        resource.Endpoints,
 	}
 	candidates, err := d.endpointCandidates(resourceTask)
 	if err != nil {
@@ -463,6 +480,11 @@ func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath stri
 		if prepared.Size > 0 {
 			if err := d.updateResourceSize(taskID, resource.ID, prepared.Size); err != nil {
 				return "", fmt.Errorf("更新资源大小失败: %w", err)
+			}
+		}
+		if resourceTask.FilenameTemplate != "" {
+			if newName := d.applyFilenameTemplate(resourceTask, candidate.endpoint.URL); newName != "" {
+				resourceTask.Name = newName
 			}
 		}
 		nameUpdated, err := d.applyContentTypeFilename(resourceTask, candidate.endpoint.URL, prepared)
@@ -507,7 +529,7 @@ func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath stri
 			return "", context.Cause(ctx)
 		}
 		endpointErrors = append(endpointErrors, fmt.Sprintf("%s: %v", candidate.protocol, err))
-		_ = d.store.WriteLog(taskID, "warn", fmt.Sprintf("下载端点 %d 失败，尝试下一个镜像: %v", candidate.endpoint.ID, err))
+		d.logWarn("下载端点 %d 失败，尝试下一个镜像: %v", candidate.endpoint.ID, err)
 	}
 	return "", fmt.Errorf("所有下载端点均不可用: %s", strings.Join(endpointErrors, "; "))
 }
@@ -547,19 +569,12 @@ func (d *Engine) applyContentTypeFilename(task *Task, endpointURL string, prepar
 		ResourceID:   task.ResourceID,
 		ResourceName: resourceName,
 	}
-	newSavePath := task.SavePath
-	if strings.EqualFold(task.ResourceType, ResourceTypeFile) {
-		newSavePath = filepath.Join(filepath.Dir(currentPath), resourceName)
-		update.TaskName = resourceName
-		update.SavePath = newSavePath
-	}
 	if store, ok := d.store.(OutputNameStore); ok {
 		if err := store.UpdateOutputName(update); err != nil {
 			return false, fmt.Errorf("更新下载文件名失败: %w", err)
 		}
 	}
 	task.Name = resourceName
-	task.SavePath = newSavePath
 	return true, nil
 }
 
@@ -641,6 +656,50 @@ func prepareWithRetry(ctx context.Context, driver ProtocolDriver, endpoint Endpo
 	return PreparedResource{}, lastErr
 }
 
+func (d *Engine) applyFilenameTemplate(task *Task, endpointURL string) string {
+	urlBasename := ""
+	if u, err := url.Parse(endpointURL); err == nil {
+		urlBasename = filepath.Base(u.Path)
+	}
+
+	vm := goja.New()
+	vm.Set("name", task.Name)
+	vm.Set("task_id", task.ID)
+	vm.Set("resource_id", task.ResourceID)
+	vm.Set("url_basename", urlBasename)
+
+	vm.Set("formatTime", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 1 {
+			return vm.ToValue("")
+		}
+		return vm.ToValue(time.Now().Format(call.Argument(0).String()))
+	})
+
+	vm.Set("padStart", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 2 {
+			return call.Arguments[0]
+		}
+		s := call.Argument(0).String()
+		length := int(call.Argument(1).ToInteger())
+		pad := "0"
+		if len(call.Arguments) >= 3 {
+			pad = call.Argument(2).String()
+		}
+		for len(s) < length {
+			s = pad + s
+		}
+		return vm.ToValue(s)
+	})
+
+	result, err := vm.RunString(task.FilenameTemplate)
+	if err != nil {
+		d.logWarn("filename template error: %v", err)
+		return ""
+	}
+
+	return strings.TrimSpace(result.String())
+}
+
 func (d *Engine) endpointCandidates(info *Task) ([]endpointCandidate, error) {
 	endpoints := append([]Endpoint(nil), info.Endpoints...)
 	if len(endpoints) == 0 && strings.TrimSpace(info.URL) != "" {
@@ -690,10 +749,6 @@ func taskFilePath(info *Task, endpointURL string) (string, error) {
 	}
 
 	savePath := filepath.Clean(info.SavePath)
-	// 新任务的 FILE SavePath 是完整文件路径；保留对目录形式的兼容。
-	if strings.EqualFold(info.ResourceType, "FILE") && filepath.Base(savePath) == name {
-		return savePath, nil
-	}
 	return filepath.Join(savePath, name), nil
 }
 
@@ -1139,7 +1194,7 @@ func (d *Engine) finishTask(taskID int, filePath string) error {
 	if err := d.store.FinishTask(taskID); err != nil {
 		return fmt.Errorf("完成任务持久化失败: %w", err)
 	}
-	_ = d.store.WriteLog(taskID, "info", fmt.Sprintf("下载完成, 文件: %s", filePath))
+	d.logInfo("下载完成, 文件: %s", filePath)
 	d.emit(taskID, EventFinished)
 	return nil
 }
@@ -1147,19 +1202,39 @@ func (d *Engine) finishTask(taskID int, filePath string) error {
 func (d *Engine) pauseTask(taskID int) {
 	_ = d.store.UpdateStatus(taskID, TaskStatusPaused)
 	_ = d.store.DeactivateConnections(taskID)
+	d.logInfo("task %d paused", taskID)
 	d.emit(taskID, EventPaused)
 }
 
 func (d *Engine) failTask(taskID int, errMsg string) {
 	_ = d.store.UpdateStatus(taskID, TaskStatusFailed)
 	_ = d.store.DeactivateConnections(taskID)
-	_ = d.store.WriteLog(taskID, "error", errMsg)
+	_ = d.store.RecordError(taskID, errMsg)
+	d.logError("task %d failed: %s", taskID, errMsg)
 	d.emit(taskID, EventFailed)
 }
 
 func (d *Engine) emit(taskID int, event EventType) {
 	if d.onEvent != nil {
 		d.onEvent(taskID, event)
+	}
+}
+
+func (d *Engine) logInfo(format string, args ...interface{}) {
+	if d.logger != nil {
+		d.logger.Info(format, args...)
+	}
+}
+
+func (d *Engine) logWarn(format string, args ...interface{}) {
+	if d.logger != nil {
+		d.logger.Warn(format, args...)
+	}
+}
+
+func (d *Engine) logError(format string, args ...interface{}) {
+	if d.logger != nil {
+		d.logger.Error(format, args...)
 	}
 }
 

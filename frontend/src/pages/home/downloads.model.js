@@ -302,12 +302,20 @@ export function normalizeTask(task) {
     taskEventError(task) ||
     (task.status === DownloadTaskStatus.Failed ? fileErrors[0]?.error : "") ||
     "";
+  const baseName = task.name || task.Name || task.title || task.Title || "unknown";
+  const leafFileCount = fileNodesCount(files) || 1;
+  let title = baseName;
+  if (files.length === 1 && files[0].name) {
+    title = files[0].name;
+  } else if (files.length > 1) {
+    title = `${baseName} (${leafFileCount}个文件)`;
+  }
   return {
     ...task,
     id: task.id || task.ID || 0,
     task_id: String(task.id || task.ID || ""),
-    title: task.name || task.Name || task.title || task.Title || "unknown",
-    name: task.name || task.Name || task.title || task.Title || "unknown",
+    title,
+    name: baseName,
     url: config.content_url || config.source_url || task.url || task.URL || "",
     cover_url: task.cover_url || task.CoverURL || task.display_cover_url || config.cover_url || "",
     error,

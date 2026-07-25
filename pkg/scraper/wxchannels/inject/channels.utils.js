@@ -4,12 +4,9 @@
  * 这里集中放置视频号页面的下载入口，通用 DOM、请求和文件工具仍由
  * utils.js 提供。该文件必须在 channels.ws.js 之前加载。
  */
-console.log("set extra methods to WXU");
 if (typeof WXU === "undefined") {
   throw new Error("utils.js must be loaded before channels.utils.js");
 }
-
-console.log("set extra methods to WXU");
 
 var __wx_username;
 var __wx_channels_tip__ = {};
@@ -652,8 +649,6 @@ async function __wx_channels_decrypt(seed) {
   WXE.onUtilsLoaded((methods) => {
     Object.assign(WXAPI, methods);
   });
-
-  console.log("set extra methods to WXU");
 
   Object.assign(WXU, {
     get API() {

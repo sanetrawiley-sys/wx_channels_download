@@ -16,7 +16,7 @@ type DownloadConfig struct {
 	Spec          string `json:"spec"`
 	DownloadCover bool   `json:"download_cover"`
 	Overwrite     bool   `json:"overwrite"`
-	SkipDuplicate bool   `json:"skip_duplicate"`
+	Duplicate bool   `json:"duplicate"`
 }
 
 // DownloadResourceInfo 描述一个资源及其镜像端点。

@@ -19,15 +19,14 @@ const (
 	ResourceTypeStream     = "STREAM"
 )
 
-// DownloadTaskV1 下载任务主表
+// DownloadTaskV1 下载任务主表（纯容器，类型和流字段已下沉到 DownloadResource）
 type DownloadTaskV1 struct {
 	Id           int    `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name         string `gorm:"not null" json:"name"`
-	ResourceType string `gorm:"not null;default:FILE" json:"resource_type"`
 	Status       int    `gorm:"not null;default:0" json:"status"`
-	// SavePath 对 FILE 是完整文件路径，对 COLLECTION/STREAM 是输出根目录。
-	SavePath   string `gorm:"not null" json:"save_path"`
-	ConfigJSON string `gorm:"column:config_json" json:"config_json"`
+	SavePath     string `gorm:"not null" json:"save_path"`
+	ConfigJSON   string `gorm:"column:config_json" json:"config_json"`
+	ErrorMessage string `gorm:"column:error_message" json:"error_message"`
 	Timestamps
 }
 
@@ -38,10 +37,25 @@ type DownloadResource struct {
 	Id         int    `gorm:"primaryKey;autoIncrement" json:"id"`
 	TaskId     int    `gorm:"not null;index:idx_resource_task" json:"task_id"`
 	Name       string `json:"name"`
-	Kind       string `gorm:"not null;default:file" json:"kind"`
-	Size       int64  `json:"size"`
-	Status     int    `json:"status"`
-	MergeOrder int    `gorm:"column:merge_order;default:0" json:"merge_order"`
+	Kind     string `gorm:"not null;default:file" json:"kind"`
+	UniqueID string `gorm:"column:unique_id;index:idx_resource_unique_id" json:"unique_id"`
+	// ResourceType 资源类型: "file" | "stream"
+	ResourceType string `gorm:"not null;default:file" json:"resource_type"`
+	Size         int64  `json:"size"`
+	Downloaded   int64  `json:"downloaded"`
+	Speed        int64  `json:"speed"`
+	Status       int    `json:"status"`
+	MergeOrder   int    `gorm:"column:merge_order;default:0" json:"merge_order"`
+	// Stream fields (moved from DownloadTaskV1)
+	StreamURL     string `gorm:"column:stream_url" json:"stream_url"`
+	RecordStart   *int64 `gorm:"column:record_start" json:"record_start"`
+	RecordEnd     *int64 `gorm:"column:record_end" json:"record_end"`
+	Duration      int64  `json:"duration"`
+	RotateMinutes int    `gorm:"column:rotate_minutes;default:0" json:"rotate_minutes"`
+	RotateSize    int64  `gorm:"column:rotate_size;default:0" json:"rotate_size"`
+	IsLive        int    `gorm:"column:is_live;default:0" json:"is_live"`
+	StartTime     *int64 `gorm:"column:start_time" json:"start_time"`
+	FinishTime    *int64 `gorm:"column:finish_time" json:"finish_time"`
 	Timestamps
 }
 
@@ -96,29 +110,3 @@ type DownloadConnection struct {
 
 func (DownloadConnection) TableName() string { return "download_connection" }
 
-// DownloadLive 直播信息
-type DownloadLive struct {
-	Id            int    `gorm:"primaryKey;autoIncrement" json:"id"`
-	TaskId        int    `gorm:"not null;index:idx_live_task" json:"task_id"`
-	StreamURL     string `gorm:"column:stream_url;not null" json:"stream_url"`
-	RecordStart   *int64 `gorm:"column:record_start" json:"record_start"`
-	RecordEnd     *int64 `gorm:"column:record_end" json:"record_end"`
-	Duration      int64  `json:"duration"`
-	RotateMinutes int    `gorm:"column:rotate_minutes;default:0" json:"rotate_minutes"`
-	RotateSize    int64  `gorm:"column:rotate_size;default:0" json:"rotate_size"`
-	IsLive        int    `gorm:"column:is_live;default:0" json:"is_live"`
-	Timestamps
-}
-
-func (DownloadLive) TableName() string { return "download_live" }
-
-// DownloadLog 任务日志
-type DownloadLog struct {
-	Id        int    `gorm:"primaryKey;autoIncrement" json:"id"`
-	TaskId    int    `gorm:"not null;index:idx_log_task" json:"task_id"`
-	Level     string `gorm:"not null;default:info" json:"level"`
-	Message   string `json:"message"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-func (DownloadLog) TableName() string { return "download_log" }

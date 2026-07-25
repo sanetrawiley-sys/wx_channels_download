@@ -638,7 +638,7 @@ function DownloaderPanelViewModel(props = {}) {
       if (params.status && params.status !== "all") {
         body.status = params.status;
       }
-      return request.post("/api/task/start_all", body);
+      return request.post("/api/v1/download_task/start_all", body);
     },
     { client: http_client },
   );
@@ -652,7 +652,7 @@ function DownloaderPanelViewModel(props = {}) {
       if (params.status && params.status !== "all") {
         body.status = params.status;
       }
-      return request.post("/api/task/pause_all", body);
+      return request.post("/api/v1/download_task/pause_all", body);
     },
     { client: http_client },
   );
@@ -666,7 +666,7 @@ function DownloaderPanelViewModel(props = {}) {
   );
   const clearReq = new Timeless.RequestCore(
     (params = {}) => {
-      return request.post("/api/task/clear", {
+      return request.post("/api/v1/download_task/clear", {
         delete_files: !!params.deleteFiles,
       });
     },
@@ -1609,7 +1609,7 @@ function DownloaderPanelViewModel(props = {}) {
           const savePath = task.save_path || task.path || "";
           if (filename && !task.filepath) {
             const isFileTask =
-              String(task.resource_type || "FILE").toUpperCase() === "FILE";
+              String(task.resource_type || "").toUpperCase() === "FILE";
             if (!isFileTask) {
               const firstFile = Array.isArray(task.files)
                 ? task.files[0]
@@ -2003,6 +2003,24 @@ function DownloaderPanelViewModel(props = {}) {
           download_cover: create_platform_download_cover_.value,
         });
         if (r.error) {
+          var code = (r.error && (r.error.code || r.error.status)) || 0;
+          if (code === 409) {
+            // 409：任务已存在，弹出重复处理对话框
+            duplicated_feed_prepare_download = {
+              objects: [{
+                platform: platform,
+                content: content,
+                config: {
+                  save_path: create_platform_save_path_.value || "",
+                  filename: create_platform_filename_.value || "",
+                  download_cover: create_platform_download_cover_.value,
+                },
+              }],
+            };
+            ui.createPlatformTaskPreviewDialog$.hide();
+            ui.overwriteConfirmDialog$.show();
+            return;
+          }
           WXU.error({ msg: r.error.message });
           return;
         }
@@ -2314,22 +2332,30 @@ function DownloaderPanelViewModel(props = {}) {
     },
     async createDownloadTask(feed, opt = {}) {
       console.log("[downloader.create]create", feed);
+      var requestBody = {
+        objects: [
+          {
+            platform: "wx_channels",
+            content: feed,
+            config: {
+              spec: opt.spec,
+              suffix: opt.suffix,
+              overwrite: !!opt.overwrite,
+              duplicate: !!opt.duplicate,
+            },
+          },
+        ],
+      };
       var [err, data] = await WXU.request({
         method: "POST",
         url: WXEnv.apiOrigin + "/api/v1/download_task/create",
-        body: {
-          objects: [
-            {
-              platform: "wx_channels",
-              content: feed,
-              config: {
-                spec: opt.spec,
-                suffix: opt.suffix,
-              },
-            },
-          ],
-        },
+        body: requestBody,
       });
+      if (err && (err.code === 409 || err.status === 409)) {
+        duplicated_feed_prepare_download = requestBody;
+        ui.overwriteConfirmDialog$.show();
+        return [null, { skipped: true }];
+      }
       WXU.downloader.show();
       if (err) {
         return [err, null];
@@ -2337,7 +2363,7 @@ function DownloaderPanelViewModel(props = {}) {
       return [null, data];
     },
     async createDownloadTaskBatch(feeds, opt = {}) {
-      var body = {
+      var requestBody = {
         objects: feeds.map(function (feed) {
           return {
             platform: "wx_channels",
@@ -2345,16 +2371,23 @@ function DownloaderPanelViewModel(props = {}) {
             config: {
               spec: opt.spec,
               suffix: opt.suffix,
+              overwrite: !!opt.overwrite,
+              duplicate: !!opt.duplicate,
             },
           };
         }),
       };
-      WXU.downloader.show();
       var [err, data] = await WXU.request({
         method: "POST",
         url: WXEnv.apiOrigin + "/api/v1/download_task/create",
-        body,
+        body: requestBody,
       });
+      if (err && (err.code === 409 || err.status === 409)) {
+        duplicated_feed_prepare_download = requestBody;
+        ui.overwriteConfirmDialog$.show();
+        return [null, { skipped: true }];
+      }
+      WXU.downloader.show();
       if (err) {
         return [err, null];
       }
@@ -2428,17 +2461,30 @@ function DownloaderPanelViewModel(props = {}) {
         if (!duplicated_feed_prepare_download) {
           return;
         }
-        const [err, data] = await WXU.request({
-          method: "POST",
-          url: WXEnv.apiOrigin + "/api/task/create",
-          body: {
-            ...duplicated_feed_prepare_download,
-            overwrite: action === "overwrite",
-            duplicate: action === "duplicate",
-          },
-        });
-        if (err) {
-          WXU.error({ msg: err.message });
+        // 构造 V1 格式的请求体，将 overwrite/duplicate 放入每个 object 的 config 中
+        var body = duplicated_feed_prepare_download;
+        if (body.objects && Array.isArray(body.objects)) {
+          body = {
+            objects: body.objects.map(function (obj) {
+              return {
+                platform: obj.platform,
+                content: obj.content,
+                config: Object.assign({}, obj.config || {}, {
+                  overwrite: action === "overwrite",
+                  duplicate: action === "duplicate",
+                }),
+              };
+            }),
+          };
+        }
+        const r = await request.post("/api/v1/download_task/create", body);
+        if (r.error) {
+          var statusCode = r.error.status || r.error.code || 0;
+          if (statusCode === 409) {
+            WXU.error({ msg: r.error.message || "下载任务已存在" });
+          } else {
+            WXU.error({ msg: r.error.message });
+          }
           return;
         }
         duplicated_feed_prepare_download = null;

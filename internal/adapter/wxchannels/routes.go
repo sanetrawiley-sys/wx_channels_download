@@ -172,6 +172,10 @@ func (r *WebsocketRoutes) HandleFetchFeedProfile(ctx *gin.Context) {
 			}
 		}
 	}
+	// oid/nid 已直接提供时，清空 reqUrl，避免浏览器端从相对 URL 解析导致超时
+	if oid != "" && nid != "" {
+		reqUrl = ""
+	}
 
 	resp, err := r.client.FetchChannelsFeedProfile(oid, nid, reqUrl, eid)
 	if err != nil {

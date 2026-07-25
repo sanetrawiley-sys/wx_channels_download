@@ -227,6 +227,7 @@ func mockChannelStaticAsset(ctx proxy.Context, pathname string, files *ChannelIn
 		ctx.Mock(200, map[string]string{
 			"Content-Type":  channelStaticAssetContentType(rel),
 			"Cache-Control": channelLibAssetCacheControl,
+			"Access-Control-Allow-Origin": "*",
 		}, string(data))
 		return true
 	}
@@ -237,9 +238,10 @@ func mockChannelStaticAsset(ctx proxy.Context, pathname string, files *ChannelIn
 		}
 		etag := channelStaticAssetETag(data)
 		headers := map[string]string{
-			"Content-Type":  channelStaticAssetContentType(rel),
-			"Cache-Control": channelSrcAssetCacheControl,
-			"ETag":          etag,
+			"Content-Type":                channelStaticAssetContentType(rel),
+			"Cache-Control":               channelSrcAssetCacheControl,
+			"Access-Control-Allow-Origin": "*",
+			"ETag":                        etag,
 		}
 		if req := ctx.Req(); req != nil && req.Header != nil {
 			if strings.Contains(req.Header.Get("If-None-Match"), etag) {
@@ -257,9 +259,10 @@ func mockChannelStaticAsset(ctx proxy.Context, pathname string, files *ChannelIn
 		}
 		etag := channelStaticAssetETag(data)
 		headers := map[string]string{
-			"Content-Type":  channelStaticAssetContentType(rel),
-			"Cache-Control": channelSrcAssetCacheControl,
-			"ETag":          etag,
+			"Content-Type":                channelStaticAssetContentType(rel),
+			"Cache-Control":               channelSrcAssetCacheControl,
+			"Access-Control-Allow-Origin": "*",
+			"ETag":                        etag,
 		}
 		if req := ctx.Req(); req != nil && req.Header != nil {
 			if strings.Contains(req.Header.Get("If-None-Match"), etag) {

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"wx_channel/internal/database/model"
 	"wx_channel/internal/download/registry"
 	"wx_channel/pkg/hermes"
+	"wx_channel/pkg/hermes/protocol"
 )
 
 type savePathTestPlatformHandler struct {
@@ -42,10 +44,9 @@ func (h *savePathTestPlatformHandler) BuildDownloadTask(_ json.RawMessage, confi
 	videoEndpoint := model.DownloadEndpoint{Protocol: "HTTP", URL: h.endpointURL + "/video", Enabled: 1}
 	info := &registry.DownloadInfo{
 		Task: model.DownloadTaskV1{
-			Name:         "platform-file.bin",
-			ResourceType: model.ResourceTypeFile,
-			Status:       model.TaskStatusWaiting,
-			SavePath:     "/platform/hard-coded/path",
+			Name:     "platform-file.bin",
+			Status:   model.TaskStatusWaiting,
+			SavePath: "/platform/hard-coded/path",
 		},
 		Resource: videoResource,
 		Endpoint: videoEndpoint,
@@ -55,7 +56,6 @@ func (h *savePathTestPlatformHandler) BuildDownloadTask(_ json.RawMessage, confi
 		}},
 	}
 	if config.DownloadCover {
-		info.Task.ResourceType = model.ResourceTypeCollection
 		info.Resources = append(info.Resources, registry.DownloadResourceInfo{
 			Resource:  model.DownloadResource{Name: "platform-file.jpg", Kind: "cover", MergeOrder: 1},
 			Endpoints: []model.DownloadEndpoint{{Protocol: "HTTP", URL: h.endpointURL + "/cover", Enabled: 1}},
@@ -68,13 +68,16 @@ func TestHandleCreateDownloadTaskV1UsesConfiguredSavePath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
+	// In-memory SQLite requires a single connection; otherwise Hermes goroutines see an empty DB.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(
 		&model.DownloadTaskV1{},
 		&model.DownloadResource{},
 		&model.DownloadEndpoint{},
 		&model.DownloadSegment{},
 		&model.DownloadConnection{},
-		&model.DownloadLog{},
 	))
 
 	registerSavePathHandler.Do(func() {
@@ -96,10 +99,11 @@ func TestHandleCreateDownloadTaskV1UsesConfiguredSavePath(t *testing.T) {
 			DownloadDir: expectedSaveDir,
 		},
 	}
-	client.downloader = hermes.New(&dbTaskStore{db: db}, nil, 1)
+	client.downloader = hermes.New(&dbTaskStore{db: db}, nil, nil, 1, "")
+	client.downloader.RegisterProtocol(protocol.NewHTTPDriver())
 	defer client.downloader.PauseAll()
 
-	body := []byte(`[{"platform":"api_test_save_path","content":{},"config":{"download_cover":true}}]`)
+	body := []byte(`{"objects":[{"platform":"api_test_save_path","content":{},"config":{"download_cover":true}}]}`)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/download_task/create", bytes.NewReader(body))
@@ -127,7 +131,6 @@ func TestHandleCreateDownloadTaskV1UsesConfiguredSavePath(t *testing.T) {
 
 	result := response.Data.Tasks[0].Data
 	assert.Equal(t, model.TaskStatusPreparing, result.Task.Status)
-	assert.Equal(t, model.ResourceTypeCollection, result.Task.ResourceType)
 	assert.True(t, savePathTestHandler.config.DownloadCover)
 	assert.Equal(t, expectedSaveDir, savePathTestHandler.config.SavePath)
 	assert.Equal(t, expectedSaveDir, result.Task.SavePath)
@@ -171,13 +174,16 @@ func TestHandleCreateDownloadTaskByURLV1InfersFilenameExtension(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
+	// In-memory SQLite requires a single connection; otherwise Hermes goroutines see an empty DB.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(
 		&model.DownloadTaskV1{},
 		&model.DownloadResource{},
 		&model.DownloadEndpoint{},
 		&model.DownloadSegment{},
 		&model.DownloadConnection{},
-		&model.DownloadLog{},
 	))
 
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -192,12 +198,13 @@ func TestHandleCreateDownloadTaskByURLV1InfersFilenameExtension(t *testing.T) {
 		db:  db,
 		cfg: &APIConfig{WorkDir: workDir, DownloadDir: workDir},
 	}
-	client.downloader = hermes.New(&dbTaskStore{db: db}, nil, 1)
+	client.downloader = hermes.New(&dbTaskStore{db: db}, nil, nil, 1, "")
+	client.downloader.RegisterProtocol(protocol.NewHTTPDriver())
 	defer client.downloader.PauseAll()
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/download_task/create_by_url", bytes.NewBufferString(`[{"url":"`+testServer.URL+`/image","filename":"cover"}]`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/download_task/create_by_url", bytes.NewBufferString(`{"objects":[{"url":"`+testServer.URL+`/image","filename":"cover"}]}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	client.handleCreateDownloadTaskByURLV1(ctx)
 
@@ -225,13 +232,13 @@ func TestHandleCreateDownloadTaskByURLV1InfersFilenameExtension(t *testing.T) {
 		}
 		return task.Status == model.TaskStatusFinished
 	}, 2*time.Second, 10*time.Millisecond)
-	assert.Equal(t, "cover.png", task.Name)
-	assert.Equal(t, filepath.Join(workDir, "cover.png"), task.SavePath)
+	assert.Equal(t, "cover", task.Name)
+	assert.Equal(t, workDir, task.SavePath)
 
 	var resource model.DownloadResource
 	require.NoError(t, db.Where("task_id = ?", task.Id).First(&resource).Error)
 	assert.Equal(t, "cover.png", resource.Name)
-	content, err := os.ReadFile(task.SavePath)
+	content, err := os.ReadFile(filepath.Join(workDir, "cover.png"))
 	require.NoError(t, err)
 	assert.Equal(t, []byte("png-data"), content)
 }
@@ -246,20 +253,17 @@ func TestHandleListDownloadTaskV1IncludesLatestFailure(t *testing.T) {
 		&model.DownloadEndpoint{},
 		&model.DownloadSegment{},
 		&model.DownloadConnection{},
-		&model.DownloadLog{},
 	))
 
 	now := time.Now().UnixMilli()
 	task := model.DownloadTaskV1{
 		Name:         "failed.bin",
-		ResourceType: model.ResourceTypeFile,
 		Status:       model.TaskStatusFailed,
 		SavePath:     t.TempDir(),
+		ErrorMessage: "latest error",
 		Timestamps:   model.Timestamps{CreatedAt: now, UpdatedAt: now},
 	}
 	require.NoError(t, db.Create(&task).Error)
-	require.NoError(t, db.Create(&model.DownloadLog{TaskId: task.Id, Level: "error", Message: "first error", CreatedAt: now}).Error)
-	require.NoError(t, db.Create(&model.DownloadLog{TaskId: task.Id, Level: "error", Message: "latest error", CreatedAt: now + 1}).Error)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -297,13 +301,11 @@ func TestHandleListDownloadTaskV1ReturnsFractionalProgress(t *testing.T) {
 		&model.DownloadEndpoint{},
 		&model.DownloadSegment{},
 		&model.DownloadConnection{},
-		&model.DownloadLog{},
 	))
 
 	now := time.Now().UnixMilli()
 	task := model.DownloadTaskV1{
 		Name:         "progress.bin",
-		ResourceType: model.ResourceTypeFile,
 		Status:       model.TaskStatusDownloading,
 		SavePath:     t.TempDir(),
 		Timestamps:   model.Timestamps{CreatedAt: now, UpdatedAt: now},
@@ -368,3 +370,84 @@ func TestHandleListDownloadTaskV1ReturnsFractionalProgress(t *testing.T) {
 	assert.Equal(t, int64(2048), response.Data.List[0].Files[0].Speed)
 	assert.InDelta(t, 0.5, response.Data.List[0].Files[0].Progress, 0.001)
 }
+
+func TestHandleCreateDownloadTaskByURLV1AppliesFilenameTemplate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	// In-memory SQLite requires a single connection; otherwise Hermes goroutines see an empty DB.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(
+		&model.DownloadTaskV1{},
+		&model.DownloadResource{},
+		&model.DownloadEndpoint{},
+		&model.DownloadSegment{},
+		&model.DownloadConnection{},
+	))
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Length", "8")
+		_, _ = w.Write([]byte("png-data"))
+	}))
+	defer testServer.Close()
+
+	workDir := t.TempDir()
+	template := "name + '_' + task_id"
+	client := &APIClient{
+		db:  db,
+		cfg: &APIConfig{WorkDir: workDir, DownloadDir: workDir, FilenameTemplate: template},
+	}
+	client.downloader = hermes.New(&dbTaskStore{db: db}, nil, nil, 1, template)
+	client.downloader.RegisterProtocol(protocol.NewHTTPDriver())
+	defer client.downloader.PauseAll()
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/download_task/create_by_url", bytes.NewBufferString(`{"objects":[{"url":"`+testServer.URL+`/image","filename":"cover"}]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	client.handleCreateDownloadTaskByURLV1(ctx)
+
+	var response struct {
+		Code int `json:"code"`
+		Data struct {
+			Tasks []struct {
+				Success bool `json:"success"`
+				Data    struct {
+					Task model.DownloadTaskV1 `json:"task"`
+				} `json:"data"`
+				Error string `json:"error"`
+			} `json:"tasks"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Zero(t, response.Code, recorder.Body.String())
+	require.Len(t, response.Data.Tasks, 1)
+	require.True(t, response.Data.Tasks[0].Success)
+
+	taskID := response.Data.Tasks[0].Data.Task.Id
+	require.NotZero(t, taskID)
+
+	var task model.DownloadTaskV1
+	require.Eventually(t, func() bool {
+		if err := db.First(&task, taskID).Error; err != nil {
+			return false
+		}
+		return task.Status == model.TaskStatusFinished
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Template renders "cover_<taskID>", then Content-Type extension appends ".png"
+	// Task is a pure container, its name and save_path are not updated.
+	var resource model.DownloadResource
+	require.NoError(t, db.Where("task_id = ?", taskID).First(&resource).Error)
+	expectedFileName := "cover_" + strconv.Itoa(taskID) + ".png"
+	assert.Equal(t, expectedFileName, resource.Name)
+	assert.Equal(t, workDir, task.SavePath)
+
+	content, err := os.ReadFile(filepath.Join(workDir, expectedFileName))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("png-data"), content)
+}
+
