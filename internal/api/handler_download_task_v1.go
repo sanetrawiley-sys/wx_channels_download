@@ -16,6 +16,7 @@ import (
 
 	"wx_channel/internal/database/model"
 	"wx_channel/internal/download/registry"
+	"wx_channel/internal/events"
 	"wx_channel/pkg/hermes"
 	result "wx_channel/internal/util"
 )
@@ -895,8 +896,20 @@ func (c *APIClient) handlePauseDownloadTaskV1(ctx *gin.Context) {
 
 	// Hermes 负责所有状态持久化（task/resource/segment/connection）、日志写入和事件广播。
 	c.downloader.Pause(task.Id)
-	task.Status = model.TaskStatusPaused
 
+	// 直播流（STREAM）暂停应标记为完成，因为流无法断点续传
+	if c.hasStreamResources(task.Id) {
+		now := time.Now().UnixMilli()
+		c.db.Model(&task).Updates(map[string]any{"status": model.TaskStatusFinished, "updated_at": now})
+		task.Status = model.TaskStatusFinished
+		if c.bus != nil {
+			go c.bus.Publish(events.DownloadTaskFinished{TaskID: task.Id})
+		}
+		result.Ok(ctx, gin.H{"task": task, "status_text": "finished"})
+		return
+	}
+
+	task.Status = model.TaskStatusPaused
 	result.Ok(ctx, gin.H{"task": task, "status_text": "paused"})
 }
 
@@ -1199,6 +1212,15 @@ func (c *APIClient) handlePauseAllDownloadTaskV1(ctx *gin.Context) {
 	var paused int
 	for _, task := range tasks {
 		c.downloader.Pause(task.Id)
+		// 直播流暂停应标记为完成
+		if c.hasStreamResources(task.Id) {
+			now := time.Now().UnixMilli()
+			c.db.Model(&model.DownloadTaskV1{}).Where("id = ?", task.Id).
+				Updates(map[string]any{"status": model.TaskStatusFinished, "updated_at": now})
+			if c.bus != nil {
+				go c.bus.Publish(events.DownloadTaskFinished{TaskID: task.Id})
+			}
+		}
 		paused++
 	}
 
@@ -1374,4 +1396,16 @@ func specFromJSON(raw json.RawMessage) *string {
 		return nil
 	}
 	return &s
+}
+
+// hasStreamResources 检查任务是否包含 STREAM 类型资源（直播流）。
+func (c *APIClient) hasStreamResources(taskID int) bool {
+	if c.db == nil {
+		return false
+	}
+	var count int64
+	c.db.Model(&model.DownloadResource{}).
+		Where("task_id = ? AND resource_type = ?", taskID, model.ResourceTypeStream).
+		Count(&count)
+	return count > 0
 }

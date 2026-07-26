@@ -146,13 +146,37 @@ function __wx_attach_live_download_dropdown_menu(trigger, options) {
     };
     WXU.set_live_feed(feed);
     var $btn = Icons.download_btn4();
-    $btn.onclick = function () {
-      var profile = __wx_channels_live_store__.profile;
-      if (!profile) {
-        WXU.error({ msg: "检测不到视频，请将本工具更新到最新版" });
+    $btn.onclick = async function () {
+      var liveData = __wx_channels_live_store__.liveData;
+      if (!liveData || !liveData.liveSdkInfo || !liveData.liveSdkInfo.liveCdnUrl) {
+        WXU.error({ msg: "检测不到直播流，请将本工具更新到最新版" });
         return;
       }
-      __wx_copy_live_download_command(profile.url);
+      var p = __wx_channels_live_store__.profile;
+      var content = Object.assign({}, liveData, p);
+      try {
+        var ins = WXU.loading({ msg: "正在创建直播下载任务..." });
+        var response = await fetch(WXEnv.apiOrigin + "/api/v1/download_task/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            objects: [{
+              platform: "wx_channels",
+              content: content,
+              config: {},
+            }],
+          }),
+        });
+        var result = await response.json();
+        ins.hide();
+        if (result.code !== 0) {
+          WXU.error({ msg: result.msg || "创建下载任务失败" });
+          return;
+        }
+        WXU.toast("直播下载任务已创建");
+      } catch (e) {
+        WXU.error({ msg: "创建下载任务失败: " + e.message });
+      }
     };
     var success = await __wx_insert_live_download_btn($btn);
     if (!success) {
@@ -185,11 +209,13 @@ function __wx_attach_live_download_dropdown_menu(trigger, options) {
     WXU.onFetchFeedProfile((data) => {
       console.log("[live.js]onFetchFeedProfile", data);
       profile = data;
+      __wx_channels_live_store__.profile = data;
       handleLoaded(profile, live);
     });
     WXU.onJoinLive(async (data) => {
       console.log("[live.js]onJoinLive", JSON.stringify(data));
       live = data;
+      __wx_channels_live_store__.liveData = data;
       handleLoaded(profile, live);
     });
   })

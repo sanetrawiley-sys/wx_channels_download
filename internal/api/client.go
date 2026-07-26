@@ -126,6 +126,7 @@ func NewAPIClient(cfg *APIConfig, parent_logger *zerolog.Logger, db *gorm.DB, st
 	apiClient.hookManager = hookManager
 	apiClient.downloader.SetHooks(hookManager)
 	apiClient.downloader.RegisterProtocol(protocol.NewHTTPDriver())
+	apiClient.downloader.RegisterProtocol(protocol.NewStreamDriver())
 
 	status_ws.OnConnected = func(wsClient *download.StatusWSClient) {
 		data, err := json.Marshal(APIClientWSMessage{

@@ -98,6 +98,22 @@ func onDownloadFinished(db *gorm.DB, logger *zerolog.Logger, taskID int) {
 	pc.Values["db"] = db
 	pc.Values["config"] = cfg // 用户提交的下载配置 map
 
+	// 直播流（STREAM）使用专用后处理管道：ffmpeg remux 为 MP4
+	if resource.ResourceType == model.ResourceTypeStream {
+		logger.Info().Int("task_id", taskID).Str("file", inputFile).Msg("postprocess: stream detected, running stream pipeline")
+		sp := StreamPostProcessPipeline(pc)
+		sp.OnEvent = buildPipelineLogger(logger, taskID)
+		go func() {
+			if result, err := sp.Run(context.Background(), pc); err != nil {
+				logger.Error().Err(err).Int("task_id", taskID).Msg("postprocess: stream pipeline failed")
+			} else if result != nil {
+				logger.Info().Int("task_id", taskID).Dur("duration", result.Duration).Msg("postprocess: stream pipeline completed")
+			}
+		}()
+		return
+	}
+
+	// 非 STREAM 资源走常规管道
 	if content.ExternalId3 != "" {
 		pc.Values["decode_key"] = content.ExternalId3
 	}
@@ -134,5 +150,25 @@ func onDownloadFinished(db *gorm.DB, logger *zerolog.Logger, taskID int) {
 		logger.Error().Err(err).Int("task_id", taskID).Msg("postprocess: pipeline failed")
 	} else if result != nil {
 		logger.Info().Int("task_id", taskID).Dur("duration", result.Duration).Msg("postprocess: pipeline completed")
+	}
+}
+
+// buildPipelineLogger 创建管道事件日志回调，供 STREAM 等管道复用。
+func buildPipelineLogger(logger *zerolog.Logger, taskID int) func(pipeline.Event) {
+	return func(evt pipeline.Event) {
+		switch evt.Kind {
+		case pipeline.EventNodeError:
+			logger.Error().
+				Str("pipeline", evt.Pipeline).
+				Str("node", evt.NodeID).
+				Err(evt.Error).
+				Int("task_id", taskID).
+				Msg("postprocess: pipeline node error")
+		case pipeline.EventPipelineDone:
+			logger.Info().
+				Str("pipeline", evt.Pipeline).
+				Int("task_id", taskID).
+				Msg("postprocess: pipeline done")
+		}
 	}
 }

@@ -21,7 +21,30 @@ type handler struct{}
 
 func (h *handler) PlatformID() string { return PlatformID }
 
+// joinLivePayload is a minimal struct to detect joinLive response format.
+// The frontend merges the joinLive data with feed profile info before sending.
+type joinLivePayload struct {
+	LiveSdkInfo *struct {
+		LiveCdnUrl string `json:"liveCdnUrl"`
+	} `json:"liveSdkInfo"`
+	LiveInfo *struct {
+		LiveId    string `json:"liveId"`
+		StartTime int    `json:"startTime"`
+	} `json:"liveInfo"`
+	LiveDescription string                   `json:"liveDescription"`
+	Nickname        string                   `json:"nickname"`
+	Username        string                   `json:"username"`
+	AnchorContact   *scraper.ChannelsContact `json:"anchorContact"`
+	Contact         *scraper.ChannelsContact `json:"contact"`
+}
+
 func (h *handler) BuildDownloadTask(contentJSON json.RawMessage, config registry.DownloadConfig) (*registry.DownloadInfo, *model.Content, *model.Account, error) {
+	// 直播流检测：joinLive 响应包含 liveSdkInfo
+	var jl joinLivePayload
+	if json.Unmarshal(contentJSON, &jl) == nil && jl.LiveSdkInfo != nil && jl.LiveSdkInfo.LiveCdnUrl != "" {
+		return buildLiveDownloadTask(&jl, config)
+	}
+
 	var obj scraper.ChannelsObject
 	if err := json.Unmarshal(contentJSON, &obj); err != nil {
 		return nil, nil, nil, err
@@ -251,6 +274,132 @@ func (h *handler) BuildDownloadTask(contentJSON json.RawMessage, config registry
 		Resource:  videoResource,
 		Endpoint:  videoEndpoint,
 		Resources: resources,
+	}, content, account, nil
+}
+
+// buildLiveDownloadTask 根据 joinLive 响应构建直播流下载任务。
+// 作者信息优先使用 anchorContact（直播专用），其次 contact，最后用顶层 nickname/username。
+//
+// UniqueID 使用 liveId + sessionStartTime 组合，以区分同一直播的不同直播场次
+// （例如直播中断后又重新开播，每次开播的 startTime 不同）。
+func buildLiveDownloadTask(jl *joinLivePayload, config registry.DownloadConfig) (*registry.DownloadInfo, *model.Content, *model.Account, error) {
+	liveId := ""
+	sessionStartTime := int64(0)
+	if jl.LiveInfo != nil {
+		liveId = jl.LiveInfo.LiveId
+		sessionStartTime = int64(jl.LiveInfo.StartTime)
+	}
+
+	// Pick author info: prefer AnchorContact for live, then Contact, then top-level fields.
+	authorNickname := jl.Nickname
+	authorUsername := jl.Username
+	authorAvatarURL := ""
+	if jl.LiveInfo != nil && jl.AnchorContact != nil {
+		if jl.AnchorContact.Nickname != "" {
+			authorNickname = jl.AnchorContact.Nickname
+		}
+		if jl.AnchorContact.Username != "" {
+			authorUsername = jl.AnchorContact.Username
+		}
+		authorAvatarURL = jl.AnchorContact.HeadUrl
+	} else if jl.Contact != nil {
+		if jl.Contact.Nickname != "" {
+			authorNickname = jl.Contact.Nickname
+		}
+		if jl.Contact.Username != "" {
+			authorUsername = jl.Contact.Username
+		}
+		authorAvatarURL = jl.Contact.HeadUrl
+	}
+
+	title := config.Filename
+	if title == "" {
+		if jl.LiveDescription != "" {
+			title = jl.LiveDescription
+		} else {
+			title = "直播"
+		}
+	}
+
+	savePath := config.SavePath
+	if savePath == "" {
+		savePath = "/downloads/wx_channels"
+	}
+
+	now := time.Now().Unix()
+	configJSON, _ := json.Marshal(buildConfigJSON(config))
+	metadataJSON, _ := json.Marshal(map[string]any{
+		"platform":     PlatformID,
+		"id":           liveId,
+		"content_type": "live",
+		"author":       authorNickname,
+		"download_at":  now,
+	})
+
+	content := &model.Content{
+		Id:          BuildContentID(liveId),
+		PlatformId:  platformIDWxChannels,
+		ExternalId:  liveId,
+		ContentType: "live",
+		Title:       title,
+		Timestamps: model.Timestamps{
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	if sessionStartTime > 0 {
+		pt := sessionStartTime
+		content.PublishTime = &pt
+	}
+
+	account := &model.Account{
+		Id:         BuildAccountID(authorUsername),
+		PlatformId: platformIDWxChannels,
+		ExternalId: authorUsername,
+		Username:   authorUsername,
+		Nickname:   authorNickname,
+		AvatarURL:  authorAvatarURL,
+		Timestamps: model.Timestamps{
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+
+	// UniqueID = liveId + sessionStartTime, so同一直播不同场次可创建多个下载任务。
+	uniqueID := liveId + "_" + strconv.FormatInt(sessionStartTime, 10)
+	if sessionStartTime == 0 {
+		uniqueID = liveId + "_" + strconv.FormatInt(now, 10)
+	}
+
+	streamResource := model.DownloadResource{
+		Name:          title + ".mkv",
+		Kind:          "stream",
+		ResourceType:  model.ResourceTypeStream,
+		IsLive:        1,
+		RotateMinutes: 10,
+		StreamURL:     jl.LiveSdkInfo.LiveCdnUrl,
+		UniqueID:      uniqueID,
+	}
+	streamEndpoint := model.DownloadEndpoint{
+		Protocol: "livestream",
+		URL:      jl.LiveSdkInfo.LiveCdnUrl,
+		Enabled:  1,
+	}
+
+	return &registry.DownloadInfo{
+		Task: model.DownloadTaskV1{
+			Name:         title,
+			Status:       model.TaskStatusWaiting,
+			SavePath:     savePath,
+			ConfigJSON:   string(configJSON),
+			MetadataJSON: string(metadataJSON),
+		},
+		Resource:  streamResource,
+		Endpoint:  streamEndpoint,
+		Resources: []registry.DownloadResourceInfo{{
+			Resource:  streamResource,
+			Endpoints: []model.DownloadEndpoint{streamEndpoint},
+		}},
 	}, content, account, nil
 }
 

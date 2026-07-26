@@ -232,3 +232,114 @@ func pickFinalKind(name, currentKind string) string {
 		return "file"
 	}
 }
+
+// StreamPostProcessPipeline 为直播流（STREAM）构建后处理管道。
+// 下载阶段产出 MKV（Matroska 支持 pipe 输出），后处理阶段将 MKV remux 为 MP4
+// 以获取更好的播放兼容性。
+//
+// 管道链: stream_convert → finalize_stream
+func StreamPostProcessPipeline(pc *pipeline.Context) *pipeline.Pipeline {
+	builder := pipeline.NewBuilder("wxchannels_stream_postprocess").
+		Add("stream_convert", streamConvertNode).
+		Add("finalize_stream", finalizeStreamNode)
+
+	builder.Chain("stream_convert", "finalize_stream")
+	return builder.Build()
+}
+
+// streamConvertNode 对下载的流文件进行容器格式转换。
+// MKV 文件可直接播放（Matroska 原生支持 HEVC），跳过转换。
+// FLV/TS 等格式需 remux 为 MP4 以改善兼容性。
+//
+// Context values:
+//   - "input_file": 原始下载文件路径
+//
+// Output:
+//   - "mp4_file": 最终播放文件路径（可能是原 MKV 或转换后的 MP4）
+var streamConvertNode = pipeline.NewFuncNode("stream_convert", "stream_convert", func(ctx context.Context, pc *pipeline.Context) error {
+	inputFile, _ := pc.Values["input_file"].(string)
+	if inputFile == "" {
+		return fmt.Errorf("缺少 input_file")
+	}
+
+	ext := strings.ToLower(filepath.Ext(inputFile))
+	// MKV 和 MP4 可直接播放，跳过转换
+	if ext == ".mp4" || ext == ".mkv" {
+		pc.Values["mp4_file"] = inputFile
+		return nil
+	}
+
+	baseName := filepath.Base(inputFile)
+	mp4File := filepath.Join(filepath.Dir(inputFile), strings.TrimSuffix(baseName, ext)+".mp4")
+
+	// ffmpeg remux，不重新编码（File output, not pipe — +faststart is safe here）
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-i", inputFile,
+		"-c", "copy",
+		"-bsf:a", "aac_adtstoasc",
+		"-movflags", "+faststart",
+		"-y",
+		mp4File,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		_ = os.Remove(mp4File)
+		return fmt.Errorf("ffmpeg stream remux 失败: %w\n%s", err, string(output))
+	}
+
+	// 删除原始文件，用 MP4 替换
+	if mp4File != inputFile {
+		_ = os.Remove(inputFile)
+	}
+
+	pc.Values["mp4_file"] = mp4File
+	return nil
+})
+
+// finalizeStreamNode 更新 task 和 resource 的名称为 MP4 后缀。
+// Context values:
+//   - "mp4_file":      最终 MP4 文件路径
+//   - "db":            *gorm.DB
+//   - "task_id":       int
+//   - "save_path":     保存目录
+var finalizeStreamNode = pipeline.NewFuncNode("finalize_stream", "finalize_stream", func(ctx context.Context, pc *pipeline.Context) error {
+	db, _ := pc.Values["db"].(*gorm.DB)
+	if db == nil {
+		return fmt.Errorf("缺少 db")
+	}
+	taskID, ok := pc.Values["task_id"].(int)
+	if !ok {
+		return fmt.Errorf("缺少 task_id")
+	}
+
+	mp4File, _ := pc.Values["mp4_file"].(string)
+	if mp4File == "" {
+		return fmt.Errorf("缺少 mp4_file")
+	}
+
+	// 更新 task 名称
+	var task model.DownloadTaskV1
+	if err := db.Where("id = ?", taskID).First(&task).Error; err == nil {
+		mp4Name := filepath.Base(mp4File)
+		if task.Name != mp4Name {
+			db.Model(&task).Update("name", mp4Name)
+		}
+	}
+
+	// 更新 resource 名称
+	var resource model.DownloadResource
+	if err := db.Where("task_id = ?", taskID).Order("merge_order ASC, id ASC").First(&resource).Error; err == nil {
+		resourceName := mp4File
+		if len(mp4File) > len(task.SavePath) && strings.HasPrefix(mp4File, task.SavePath) {
+			resourceName = strings.TrimPrefix(mp4File[len(task.SavePath):], string(filepath.Separator))
+		}
+		if resource.Name != resourceName {
+			db.Model(&resource).Updates(map[string]any{
+				"name": resourceName,
+				"kind": "video",
+			})
+		}
+	}
+
+	return nil
+})
