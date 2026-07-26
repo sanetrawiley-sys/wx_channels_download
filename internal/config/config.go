@@ -301,47 +301,11 @@ func (c *Config) LoadConfig() error {
 		Group:       "Download",
 	})
 	Register(ConfigItem{
-		Key:         "download.frontend",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "是否通过前端解密、下载，不调用后台下载能力",
-		Title:       "前端下载",
-		Group:       "Download",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "download.defaultHighest",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "点击下载图标时是否下载原始视频（该配置不再生效）",
-		Title:       "原始视频",
-		Group:       "Download",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
 		Key:         "download.filenameTemplate",
 		Type:        ConfigTypeString,
 		Default:     "{{filename}}_{{spec}}",
 		Description: "用于配置下载文件的名称，支持 {{filename}} 和 {{spec}} 等变量",
 		Title:       "文件名模板",
-		Group:       "Download",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "download.forceCheckAllFeeds",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "批量下载时是否强制检查所有视频",
-		Title:       "检查所有视频",
-		Group:       "Download",
-		HotReload:   true,
-	})
-	Register(ConfigItem{
-		Key:         "download.pauseWhenDownload",
-		Type:        ConfigTypeBool,
-		Default:     false,
-		Description: "点击下载时是否暂停播放",
-		Title:       "暂停播放",
 		Group:       "Download",
 		HotReload:   true,
 	})

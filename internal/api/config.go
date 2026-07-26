@@ -58,6 +58,8 @@ type APIConfig struct {
 
 	FilenameTemplate string
 
+	HooksScript string
+
 	DBType         string
 	DBHost         string
 	DBPort         string
@@ -148,6 +150,7 @@ func NewAPIConfig(c *config.Config, remote_mode bool) *APIConfig {
 		BrowserDockerChromeCommand:   viper.GetString("sandbox.chromeCommand"),
 
 		FilenameTemplate: viper.GetString("download.filenameTemplate"),
+		HooksScript:      viper.GetString("download.hooksScript"),
 
 		DBType:         viper.GetString("db.type"),
 		DBHost:         viper.GetString("db.host"),

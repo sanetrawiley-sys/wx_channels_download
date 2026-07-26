@@ -7,16 +7,20 @@ import (
 	"sync"
 
 	"wx_channel/internal/database/model"
+	"wx_channel/internal/pipeline"
 )
 
 // DownloadConfig 下载配置，各平台通用
 type DownloadConfig struct {
 	SavePath      string `json:"save_path"`
 	Filename      string `json:"filename"`
-	Spec          string `json:"spec"`
+	Spec          *string `json:"spec"`
+	Suffix        string `json:"suffix"`        // 文件后缀，如 ".mp3"、".jpg"
 	DownloadCover bool   `json:"download_cover"`
 	Overwrite     bool   `json:"overwrite"`
-	Duplicate bool   `json:"duplicate"`
+	Duplicate     bool   `json:"duplicate"`
+	ConvertMP3    bool   `json:"convert_mp3"`
+	UploadCloud   bool   `json:"upload_cloud"`
 }
 
 // DownloadResourceInfo 描述一个资源及其镜像端点。
@@ -44,6 +48,11 @@ type PlatformHandler interface {
 	// config: 下载配置（目录、文件名、清晰度、覆盖策略等）
 	// 返回 DownloadInfo（task/resource/endpoint）、Content、Account
 	BuildDownloadTask(contentJSON json.RawMessage, config DownloadConfig) (*DownloadInfo, *model.Content, *model.Account, error)
+}
+
+// PostProcessor 后处理接口。平台处理器可选实现此接口，根据上下文配置返回后处理管道。
+type PostProcessor interface {
+	PostProcessPipeline(pc *pipeline.Context) *pipeline.Pipeline
 }
 
 var (

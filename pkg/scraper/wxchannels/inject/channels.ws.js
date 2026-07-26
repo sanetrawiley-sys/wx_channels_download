@@ -65,8 +65,9 @@ async function fetchFeedProfileWith(data) {
     } else {
       try {
         var u = new URL(decodeURIComponent(data.url), window.location.origin);
-        data.oid = WXU.API.decodeBase64ToUint64String(u.searchParams.get("oid"));
-        data.nid = WXU.API.decodeBase64ToUint64String(u.searchParams.get("nid"));
+        console.log('WXU.API.decodeBase64ToUint64String', WXU.Base64, WXU.API.decodeBase64ToUint64String);
+        data.oid = WXU.Base64.decodeBase64ToUint64String(u.searchParams.get("oid"));
+        data.nid = WXU.Base64.decodeBase64ToUint64String(u.searchParams.get("nid"));
       } catch (parseErr) {
         return [new Error("failed to parse feed URL: " + parseErr.message), null];
       }

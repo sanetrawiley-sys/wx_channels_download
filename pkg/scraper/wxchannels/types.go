@@ -11,6 +11,13 @@ import (
 
 var ErrUnsupportedURL = errors.New("unsupported channels url")
 
+// MediaType constants for ChannelsObjectDesc.MediaType and ChannelsMediaItem.MediaType.
+const (
+	MediaTypePicture = 2 // 图集
+	MediaTypeVideo   = 4 // 视频
+	MediaTypeLive    = 9 // 直播
+)
+
 type ChannelsRequestResp[T any] struct {
 	ErrCode int    `json:"errCode"`
 	ErrMsg  string `json:"errMsg"`

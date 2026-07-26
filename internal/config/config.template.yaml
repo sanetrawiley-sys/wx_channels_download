@@ -10,13 +10,9 @@ pagespy:
   enabled: false
 
 download:
-  defaultHighest: false
   filenameTemplate: "{{filename}}_{{spec}}"
   dir: "%UserDownloads%"
-  pauseWhenDownload: false
   playDoneAudio: true
-  frontend: false
-  forceCheckAllFeeds: false
   remoteServer:
     enabled: false
     protocol: "http"
@@ -61,6 +57,11 @@ proxy:
 
 channels:
   disableLocationToHome: false
+  download:
+    defaultHighest: false
+    frontend: false
+    pauseWhenDownload: false
+    forceCheckAllFeeds: false
 
 mp:
   enabled: false

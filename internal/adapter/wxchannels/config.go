@@ -8,6 +8,10 @@ import (
 type ChannelsPluginConfig struct {
 	DisableLocationToHome bool
 	RefreshInterval       int
+	DownloadDefaultHighest     bool
+	DownloadFrontend           bool
+	DownloadForceCheckAllFeeds bool
+	DownloadPauseWhenDownload  bool
 }
 
 func (c *ChannelsPluginConfig) ConfigNamespace() string { return "channels" }
@@ -32,12 +36,52 @@ func (c *ChannelsPluginConfig) ConfigSchema() []config.ConfigItem {
 			Group:       "Channels",
 			HotReload:   true,
 		},
+		{
+			Key:         "download.defaultHighest",
+			Type:        config.ConfigTypeBool,
+			Default:     false,
+			Description: "点击下载图标时是否下载原始视频（该配置不再生效）",
+			Title:       "原始视频",
+			Group:       "Channels",
+			HotReload:   true,
+		},
+		{
+			Key:         "download.frontend",
+			Type:        config.ConfigTypeBool,
+			Default:     false,
+			Description: "是否通过前端解密、下载，不调用后台下载能力",
+			Title:       "前端下载",
+			Group:       "Channels",
+			HotReload:   true,
+		},
+		{
+			Key:         "download.forceCheckAllFeeds",
+			Type:        config.ConfigTypeBool,
+			Default:     false,
+			Description: "批量下载时是否强制检查所有视频",
+			Title:       "检查所有视频",
+			Group:       "Channels",
+			HotReload:   true,
+		},
+		{
+			Key:         "download.pauseWhenDownload",
+			Type:        config.ConfigTypeBool,
+			Default:     false,
+			Description: "点击下载时是否暂停播放",
+			Title:       "暂停播放",
+			Group:       "Channels",
+			HotReload:   true,
+		},
 	}
 }
 
 func (c *ChannelsPluginConfig) ApplyConfig(sub *config.SubViper) error {
 	c.DisableLocationToHome = sub.GetBool("disableLocationToHome")
 	c.RefreshInterval = sub.GetInt("refreshInterval")
+	c.DownloadDefaultHighest = sub.GetBool("download.defaultHighest")
+	c.DownloadFrontend = sub.GetBool("download.frontend")
+	c.DownloadForceCheckAllFeeds = sub.GetBool("download.forceCheckAllFeeds")
+	c.DownloadPauseWhenDownload = sub.GetBool("download.pauseWhenDownload")
 	return nil
 }
 

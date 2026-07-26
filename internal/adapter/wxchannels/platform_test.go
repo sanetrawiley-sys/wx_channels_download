@@ -22,7 +22,7 @@ func TestBuildDownloadTaskWithCoverCreatesMultipleResources(t *testing.T) {
 		},
 		ObjectDesc: scraper.ChannelsObjectDesc{
 			Description: "测试视频",
-			MediaType:   4,
+			MediaType:   scraper.MediaTypeVideo,
 			Media: []scraper.ChannelsMediaItem{{
 				URL:      "https://video.example.com/video.mp4?token=video",
 				CoverUrl: "https://image.example.com/cover.jpg?token=cover",

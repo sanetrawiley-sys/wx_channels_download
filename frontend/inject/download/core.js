@@ -674,29 +674,27 @@ function DownloaderPanelViewModel(props = {}) {
   );
   const createTaskReq = new Timeless.RequestCore(
     (params = {}) =>
-      request.post("/api/v1/download_task/create_by_url", [
-        {
+      request.post("/api/v1/download_task/create_by_url", {
+        objects: [{
           url: params.url,
           filename: params.filename || "",
           save_path: params.save_path || "",
-        },
-      ]),
+        }],
+      }),
     { client: http_client },
   );
   const createPlatformTaskReq = new Timeless.RequestCore(
     (params = {}) =>
-      request.post("/api/v1/download_task/create", [
-        {
+      request.post("/api/v1/download_task/create", {
+        objects: [{
           platform: params.platform || "",
           content: params.content || {},
           config: {
-            save_path: params.save_path || "",
-            filename: params.filename || "",
             spec: params.spec || "",
             download_cover: !!params.download_cover,
           },
-        },
-      ]),
+        }],
+      }),
     { client: http_client },
   );
   const prepareTaskReq = new Timeless.RequestCore(
@@ -716,14 +714,13 @@ function DownloaderPanelViewModel(props = {}) {
           platform: params.platform || "",
           content: params.content || {},
           config: {
-            save_path: params.save_path || "",
-            filename: params.filename || "",
             download_cover: !!params.download_cover,
           },
         },
       ]),
     { client: http_client },
   );
+
 
   const tasks_ = refarr([]);
   const task_count_ = ref(0);
@@ -1970,6 +1967,11 @@ function DownloaderPanelViewModel(props = {}) {
           WXU.error({ msg: r.error.message });
           return;
         }
+        const taskResult = r.data && r.data.tasks && r.data.tasks[0];
+        if (taskResult && !taskResult.success) {
+          WXU.error({ msg: taskResult.error || "创建下载任务失败" });
+          return;
+        }
         ui.createTaskPreviewDialog$.hide();
         WXU.toast("下载任务创建成功");
         const reloadResult = await reloadTasks();
@@ -1998,8 +2000,6 @@ function DownloaderPanelViewModel(props = {}) {
         const r = await createPlatformTaskReq.run({
           platform: platform,
           content: content,
-          save_path: create_platform_save_path_.value || "",
-          filename: create_platform_filename_.value || "",
           download_cover: create_platform_download_cover_.value,
         });
         if (r.error) {
@@ -2011,8 +2011,6 @@ function DownloaderPanelViewModel(props = {}) {
                 platform: platform,
                 content: content,
                 config: {
-                  save_path: create_platform_save_path_.value || "",
-                  filename: create_platform_filename_.value || "",
                   download_cover: create_platform_download_cover_.value,
                 },
               }],
@@ -2022,6 +2020,11 @@ function DownloaderPanelViewModel(props = {}) {
             return;
           }
           WXU.error({ msg: r.error.message });
+          return;
+        }
+        const taskResult = r.data && r.data.tasks && r.data.tasks[0];
+        if (taskResult && !taskResult.success) {
+          WXU.error({ msg: taskResult.error || "创建下载任务失败" });
           return;
         }
         ui.createPlatformTaskPreviewDialog$.hide();
@@ -2485,6 +2488,11 @@ function DownloaderPanelViewModel(props = {}) {
           } else {
             WXU.error({ msg: r.error.message });
           }
+          return;
+        }
+        const taskResult = r.data && r.data.tasks && r.data.tasks[0];
+        if (taskResult && !taskResult.success) {
+          WXU.error({ msg: taskResult.error || "创建下载任务失败" });
           return;
         }
         duplicated_feed_prepare_download = null;

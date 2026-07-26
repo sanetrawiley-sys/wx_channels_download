@@ -1,0 +1,2 @@
+-- SQLite < 3.35.0 does not support DROP COLUMN.
+-- This rollback is a no-op.

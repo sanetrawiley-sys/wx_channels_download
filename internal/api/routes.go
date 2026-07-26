@@ -21,6 +21,11 @@ func (c *APIClient) SetupRoutes() {
 	c.engine.GET("/", c.handleIndex)
 	c.engine.GET("/download", c.handleDownloadPage)
 	c.engine.GET("/channels", c.handleChannelsPage)
+	c.engine.GET("/migration", c.handleMigrationPage)
+	c.engine.POST("/api/v1/migration/load", c.handleMigrationLoad)
+	c.engine.POST("/api/v1/migration/table", c.handleMigrationTable)
+	c.engine.POST("/api/v1/migration/file/list", c.handleMigrationFileList)
+	c.engine.GET("/api/v1/migration/common_dirs", c.handleMigrationCommonDirs)
 	c.engine.GET("/admin", c.handlePlatformWorkflowWebsocket)
 	if !c.cfg.RemoteServerMode {
 		// 公众号接口

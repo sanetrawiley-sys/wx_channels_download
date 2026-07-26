@@ -64,6 +64,23 @@ func TestFilenameProcessorAppendExtensionRespectsFilenameLimit(t *testing.T) {
 	}
 }
 
+func TestFilenameProcessorAppendExtensionWithSubdirectory(t *testing.T) {
+	processor := NewFilenameProcessor("", nil)
+	name, err := processor.AppendExtension("AuthorName/VideoTitle_WT111", ".mp4")
+	require.NoError(t, err)
+	assert.Equal(t, "AuthorName/VideoTitle_WT111.mp4", name)
+}
+
+func TestFilenameProcessorAppendExtensionWithSubdirectoryLongName(t *testing.T) {
+	processor := NewFilenameProcessor("", nil)
+	longBase := strings.Repeat("a", 250)
+	name, err := processor.AppendExtension("dir/"+longBase, ".mp4")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(name, "dir/"))
+	assert.True(t, strings.HasSuffix(name, ".mp4"))
+	assert.LessOrEqual(t, len(name), len("dir/")+235)
+}
+
 func TestProcessFilenamePreservesInputAndDeduplicates(t *testing.T) {
 	items := []map[string]string{
 		{"id": "1", "name": "same.mp4"},

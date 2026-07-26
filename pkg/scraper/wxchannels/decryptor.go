@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path"
 	"strconv"
@@ -351,4 +352,26 @@ func (mp *ChannelsVideoDecryptor) SimpleProxy(targetURL string, w http.ResponseW
 		return
 	}
 	io.Copy(w, resp.Body)
+}
+
+// DecryptFile reads an encrypted file from inputPath, decrypts it using the given key
+// and encLimit, and writes the result to outputPath.
+func DecryptFile(inputPath, outputPath string, key uint64, encLimit uint64) error {
+	inputFile, err := os.Open(inputPath)
+	if err != nil {
+		return fmt.Errorf("打开输入文件失败 %s: %w", inputPath, err)
+	}
+	defer inputFile.Close()
+
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("创建输出文件失败 %s: %w", outputPath, err)
+	}
+	defer outputFile.Close()
+
+	decryptReader := NewDecryptReader(inputFile, key, 0, encLimit)
+	if _, err := io.Copy(outputFile, decryptReader); err != nil {
+		return fmt.Errorf("解密文件失败: %w", err)
+	}
+	return nil
 }

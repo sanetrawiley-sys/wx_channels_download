@@ -56,7 +56,7 @@ func makeVideoObject() *scraper.ChannelsObject {
 		},
 		ObjectDesc: scraper.ChannelsObjectDesc{
 			Description: "测试视频",
-			MediaType:   4,
+			MediaType:   scraper.MediaTypeVideo,
 			Media: []scraper.ChannelsMediaItem{
 				{
 					URL:          "https://video.example.com/video.mp4?",
@@ -247,7 +247,7 @@ func TestToContent_EmptyID(t *testing.T) {
 
 func TestToContent_MediaType9(t *testing.T) {
 	obj := makeVideoObject()
-	obj.ObjectDesc.MediaType = 9
+	obj.ObjectDesc.MediaType = scraper.MediaTypeLive
 	_, err := adapter.ToContent(obj)
 	if err == nil {
 		t.Fatal("expected error for mediaType=9")
@@ -286,7 +286,7 @@ func TestToContent_Picture(t *testing.T) {
 		},
 		ObjectDesc: scraper.ChannelsObjectDesc{
 			Description: "一组美图",
-			MediaType:   2,
+			MediaType:   scraper.MediaTypePicture,
 		},
 	}
 	got, err := adapter.ToContent(obj)
@@ -347,7 +347,7 @@ func TestToContent_FullConversion(t *testing.T) {
 		},
 		ObjectDesc: scraper.ChannelsObjectDesc{
 			Description: "这是一条真实的测试视频",
-			MediaType:   4,
+			MediaType:   scraper.MediaTypeVideo,
 			Media: []scraper.ChannelsMediaItem{
 				{
 					URL:          "https://finder.video.qq.com/251/20302/stodownload?encfilekey=actual_key",
@@ -540,7 +540,7 @@ func TestToContent_PictureNoFiles(t *testing.T) {
 		ID:            "pic_no_files",
 		ObjectNonceId: "nonce_no_files",
 		Type:          "picture",
-		ObjectDesc:    scraper.ChannelsObjectDesc{MediaType: 2},
+		ObjectDesc:    scraper.ChannelsObjectDesc{MediaType: scraper.MediaTypePicture},
 	}
 	_, err := adapter.ToContent(obj)
 	if err == nil {
@@ -553,7 +553,7 @@ func TestToContent_MediaNoMedia(t *testing.T) {
 		ID:            "media_no_data",
 		ObjectNonceId: "nonce_no_data",
 		Type:          "media",
-		ObjectDesc:    scraper.ChannelsObjectDesc{MediaType: 4},
+		ObjectDesc:    scraper.ChannelsObjectDesc{MediaType: scraper.MediaTypeVideo},
 	}
 	_, err := adapter.ToContent(obj)
 	if err == nil {

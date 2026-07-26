@@ -232,20 +232,20 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 				frontend.AppendScriptSrcs(
 					&injected,
 					crossoriginAttr,
-					ChannelInjectAssetURL(assetBaseURL, "channels.events.js"),
-					ChannelInjectAssetURL(assetBaseURL, "channels.env.js"),
-					ChannelInjectAssetURL(assetBaseURL, "channels.utils.js"),
-					ChannelInjectAssetURL(assetBaseURL, "channels.ws.js"),
-				)
-				frontend.AppendScriptSrcs(
-					&injected,
-					crossoriginAttr,
 					frontend.InjectAssetURL(assetBaseURL, "download/core.js"),
 					frontend.InjectAssetURL(assetBaseURL, "download/panel.js"),
 				)
 				if cfg.InjectGlobalScript != "" {
 					frontend.AppendInlineScript(&injected, "", cfg.InjectGlobalScript)
 				}
+				frontend.AppendScriptSrcs(
+					&injected,
+					crossoriginAttr,
+					ChannelInjectAssetURL(assetBaseURL, "channels.events.js"),
+					ChannelInjectAssetURL(assetBaseURL, "channels.env.js"),
+					ChannelInjectAssetURL(assetBaseURL, "channels.utils.js"),
+					ChannelInjectAssetURL(assetBaseURL, "channels.ws.js"),
+				)
 				if pathname == "/web/pages/home" {
 					frontend.AppendScriptSrcs(&injected, crossoriginAttr, ChannelInjectAssetURL(assetBaseURL, "channels.home.js"))
 					if cfg.InjectExtraScriptAfterJSMain != "" {
@@ -487,7 +487,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 							}
 						}
 						api_methods_escaped := strings.ReplaceAll(api_methods, "$", "$$")
-						js_wxapi := `;console.log("before WXU.emit channels:APILoaded", WXU);WXU.emit("channels:APILoaded",` + api_methods_escaped + `);export{`
+						js_wxapi := `;WXU.emit("channels:APILoaded",` + api_methods_escaped + `);export{`
 						js_script = jsExportReg.ReplaceAllString(js_script, js_wxapi)
 					}
 					ctx.SetResponseBody(js_script)
@@ -526,7 +526,7 @@ func CreateInterceptorPlugins(cfg *InterceptorConfig, files *frontend.ChannelInj
 						js_script = jsGoToPrevFlowReg.ReplaceAllString(js_script, js_go_prev_feed)
 					}
 					{
-						js_wxutil := `;WXU.emit("channels:UtilsLoaded",{decodeBase64ToUint64String:decodeBase64ToUint64String,createAdapterFromGlobalMapper:createAdapterFromGlobalMapper,finderJoinLiveMapper:finderJoinLiveMapper});export{`
+						js_wxutil := `;console.log('before channels:UtilsLoaded', decodeBase64ToUint64String);WXU.emit("channels:UtilsLoaded",{decodeBase64ToUint64String:decodeBase64ToUint64String,createAdapterFromGlobalMapper:createAdapterFromGlobalMapper,finderJoinLiveMapper:finderJoinLiveMapper});export{`
 						js_script = jsExportReg.ReplaceAllString(js_script, js_wxutil)
 					}
 					{

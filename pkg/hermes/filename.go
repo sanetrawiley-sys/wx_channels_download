@@ -87,6 +87,8 @@ func (fp *FilenameProcessor) SanitizeFilename(filename string) (string, error) {
 
 // AppendExtension appends a known extension without exceeding the filename
 // length limit. The extension is included in the 235-byte limit.
+// If filename contains a subdirectory path (e.g., "dir/video"), the directory
+// portion is preserved and only the base filename is sanitized and truncated.
 func (fp *FilenameProcessor) AppendExtension(filename, extension string) (string, error) {
 	extension = strings.TrimSpace(extension)
 	if extension == "" {
@@ -95,7 +97,8 @@ func (fp *FilenameProcessor) AppendExtension(filename, extension string) (string
 	if !strings.HasPrefix(extension, ".") {
 		return "", fmt.Errorf("extension must start with a dot")
 	}
-	cleanName, err := fp.SanitizeFilename(filename)
+	dir, base := filepath.Split(filename)
+	cleanName, err := fp.SanitizeFilename(base)
 	if err != nil {
 		return "", err
 	}
@@ -107,7 +110,7 @@ func (fp *FilenameProcessor) AppendExtension(filename, extension string) (string
 	if cleanName == "" {
 		return "", fmt.Errorf("filename contains only invalid characters")
 	}
-	return cleanName + extension, nil
+	return dir + cleanName + extension, nil
 }
 
 // NormalizeFilename sanitizes a relative path without changing its duplicate

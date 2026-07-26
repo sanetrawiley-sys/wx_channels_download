@@ -47,8 +47,14 @@ func BuildFilename(feed struct {
 	if strings.TrimSpace(template) == "" {
 		return default_name
 	}
+	return ReplaceTemplateVars(template, params)
+}
+
+// ReplaceTemplateVars 替换模板字符串中的 {{key}} 占位符为 params 中对应的值。
+// 若 key 不在 params 中，则替换为空字符串。
+func ReplaceTemplateVars(template string, params map[string]string) string {
 	re := regexp.MustCompile(`\{\{([^}]+)\}\}`)
-	filename := re.ReplaceAllStringFunc(template, func(m string) string {
+	return re.ReplaceAllStringFunc(template, func(m string) string {
 		sub := re.FindStringSubmatch(m)
 		if len(sub) > 1 {
 			if v, ok := params[sub[1]]; ok {
@@ -57,7 +63,6 @@ func BuildFilename(feed struct {
 		}
 		return ""
 	})
-	return filename
 }
 
 func ValidateAndSplitFilename(input string) (string, string, error) {

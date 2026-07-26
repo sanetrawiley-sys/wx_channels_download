@@ -189,19 +189,19 @@ var WXBase64 = (() => {
   }
 
   try {
-    if (typeof WXU !== "undefined" && WXU && WXU.API) {
-      Object.assign(WXU.API, {
-        urlEncode,
-        urlDecode,
-        base64ToArrayBuffer,
-        arrayBufferToBase64,
-        decodeBase64JSON,
-        encodeStringBase64,
-        decodeBase64String,
-        encodeUint64ToBase64,
-        decodeBase64ToUint64String,
-      });
-    }
+    // if (typeof WXU !== "undefined" && WXU && WXU.API) {
+    //   Object.assign(WXU.API, {
+    //     urlEncode,
+    //     urlDecode,
+    //     base64ToArrayBuffer,
+    //     arrayBufferToBase64,
+    //     decodeBase64JSON,
+    //     encodeStringBase64,
+    //     decodeBase64String,
+    //     encodeUint64ToBase64,
+    //     decodeBase64ToUint64String,
+    //   });
+    // }
   } catch (e) {
     void e;
   }

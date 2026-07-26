@@ -121,7 +121,7 @@ func ToContent(obj *scraper.ChannelsObject) (*model.Content, error) {
 	}
 
 	// Picture
-	if obj.Type == "picture" || obj.ObjectDesc.MediaType == 2 {
+	if obj.Type == "picture" || obj.ObjectDesc.MediaType == scraper.MediaTypePicture {
 		files := obj.Files
 		if len(files) == 0 {
 			files = obj.ObjectDesc.Media
@@ -144,7 +144,7 @@ func ToContent(obj *scraper.ChannelsObject) (*model.Content, error) {
 	}
 
 	// Media (video)
-	if obj.ObjectDesc.MediaType == 9 {
+	if obj.ObjectDesc.MediaType == scraper.MediaTypeLive {
 		return nil, errors.New("不支持直播回放（mediaType=9）")
 	}
 
@@ -189,17 +189,42 @@ func PickSpec(obj *scraper.ChannelsObject) string {
 	if len(specs) > 0 {
 		return specs[0].FileFormat
 	}
-	return "original"
+	return ""
 }
 
-// BuildDownloadURLWithSpec appends the X-snsvideoflag spec parameter to the base ObjectURL.
-// Returns the unmodified ObjectURL if spec is empty, "original", or the URL is a zip:// scheme.
+// BuildDownloadURLWithSpec returns the download URL for the given spec.
+//
+//   - If spec is a codec name (e.g. "xWT111"), appends &X-snsvideoflag= to the base URL.
+//   - If spec is "" or "original", strips all query params except encfilekey and token,
+//     mirroring the JS __wx_channels_download4 original-video logic.
+//   - zip:// URLs are returned as-is.
 func BuildDownloadURLWithSpec(obj *scraper.ChannelsObject, spec string) string {
 	baseURL := ObjectURL(obj)
-	if spec == "" || spec == "original" || strings.Contains(baseURL, "zip://") {
-		return baseURL
+
+	// 有具体 spec: 追加 X-snsvideoflag 参数
+	if spec != "" {
+		return baseURL + "&X-snsvideoflag=" + spec
 	}
-	return baseURL + "&X-snsvideoflag=" + spec
+
+	// spec 为空 下载原始视频，仅保留 encfilekey 和 token
+	if u, err := url.Parse(baseURL); err == nil {
+		filekey := u.Query().Get("encfilekey")
+		token := u.Query().Get("token")
+		if filekey != "" && token != "" {
+			clean := &url.URL{
+				Scheme: u.Scheme,
+				Host:   u.Host,
+				Path:   u.Path,
+			}
+			q := clean.Query()
+			q.Set("encfilekey", filekey)
+			q.Set("token", token)
+			clean.RawQuery = q.Encode()
+			return clean.String()
+		}
+	}
+
+	return baseURL
 }
 
 // DecryptKeyInt returns the video decrypt key as int, or 0 on failure.
@@ -234,7 +259,7 @@ func ObjectURL(obj *scraper.ChannelsObject) string {
 	if obj.LiveInfo != nil {
 		return ""
 	}
-	if obj.Type == "picture" || obj.ObjectDesc.MediaType == 2 {
+	if obj.Type == "picture" || obj.ObjectDesc.MediaType == scraper.MediaTypePicture {
 		return ""
 	}
 	if len(obj.ObjectDesc.Media) == 0 {

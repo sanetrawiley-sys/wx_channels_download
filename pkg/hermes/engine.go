@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,9 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"wx_channel/pkg/util"
 
 	"github.com/dop251/goja"
 )
@@ -49,10 +53,11 @@ const (
 )
 
 const (
-	defaultSegmentCount = 10
-	minimumSegmentSize  = int64(1024 * 1024)
-	progressInterval    = 500 * time.Millisecond
-	maxReadAttempts     = 3
+	defaultSegmentCount  = 10
+	minimumSegmentSize   = int64(1024 * 1024)
+	progressInterval     = 500 * time.Millisecond
+	progressLogInterval  = 3 * time.Second
+	maxReadAttempts      = 3
 )
 
 // Endpoint 是协议驱动需要的下载源信息。Headers 和 Cookies 仅传给驱动，
@@ -77,14 +82,17 @@ type Task struct {
 	ResourceID       int
 	Endpoints        []Endpoint
 	Resources        []Resource
+	Config   string // ConfigJSON from DB, download configuration for hooks
+	Metadata string // MetadataJSON from DB, content metadata for hooks
 }
 
 // Resource 是 Task 中可独立下载的文件资源。
 type Resource struct {
 	ID           int
 	Name         string
-	ResourceType string // "FILE" | "STREAM"
+	ResourceType string            // "FILE" | "STREAM"
 	Endpoints    []Endpoint
+	Extra        map[string]string // 用户自定义字段，与下载无关，透传到 hook
 }
 
 // SegmentRange 是协议无关的有限字节范围，两端均包含。
@@ -204,6 +212,7 @@ type Engine struct {
 	onEvent          EventHandler
 	drivers          map[string]ProtocolDriver
 	filenameTemplate string
+	hooks            *HookManager
 }
 
 type cancellationReason uint8
@@ -253,6 +262,11 @@ func New(store Store, logger Logger, onEvent EventHandler, maxConcurrent int, fi
 		filenameTemplate: filenameTemplate,
 	}
 	return d
+}
+
+// SetHooks 设置 JS hook 管理器。传入 nil 禁用 hook。
+func (d *Engine) SetHooks(h *HookManager) {
+	d.hooks = h
 }
 
 // RegisterProtocol 注册或替换协议驱动。协议名不区分大小写。
@@ -422,18 +436,22 @@ func (d *Engine) run(taskID int, ctx context.Context) error {
 	}
 	d.emit(taskID, EventStarted)
 
+	config, _ := parseConfigAndMetadata(info.Config, info.Metadata)
+
 	filePaths := make([]string, 0, len(resources))
 	for _, resource := range resources {
-		filePath, err := d.downloadResource(ctx, taskID, info.SavePath, resource.ResourceType, resource)
+		filePath, err := d.downloadResource(ctx, taskID, info.SavePath, resource.ResourceType, resource, config)
 		if err != nil {
 			return fmt.Errorf("资源 %s 下载失败: %w", resource.Name, err)
 		}
 		filePaths = append(filePaths, filePath)
 	}
+	d.logInfo("task %d 所有资源下载完毕，完成任务持久化中...", taskID)
 	return d.finishTask(taskID, strings.Join(filePaths, ", "))
 }
 
-func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath string, resourceType string, resource Resource) (string, error) {
+func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath string, resourceType string, resource Resource, config map[string]any) (string, error) {
+	originalDBName := resource.Name
 	resourceTask := &Task{
 		ID:               taskID,
 		Name:             resource.Name,
@@ -483,11 +501,37 @@ func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath stri
 			}
 		}
 		if resourceTask.FilenameTemplate != "" {
-			if newName := d.applyFilenameTemplate(resourceTask, candidate.endpoint.URL); newName != "" {
+			meta := buildTemplateMeta(resource.Extra, config, resourceTask.Name)
+			rawName := resourceTask.Name
+			if newName := d.applyFilenameTemplate(resourceTask, candidate.endpoint.URL, meta); newName != "" {
 				resourceTask.Name = newName
+				d.logInfo("task %d resource %d filenameTemplate 应用: %q -> %q (template=%q)",
+					taskID, resource.ID, rawName, newName, resourceTask.FilenameTemplate)
 			}
 		}
-		nameUpdated, err := d.applyContentTypeFilename(resourceTask, candidate.endpoint.URL, prepared)
+
+		// onFilename hook: 用户自定义最终文件名
+		if d.hooks != nil && d.hooks.HasFilenameHook() {
+			params := &FilenameParams{
+				Meta: buildResourceMeta(resource.Extra, config),
+				Task: TaskInfo{
+					Name:     resourceTask.Name,
+					SavePath: savePath,
+					Config:   config,
+				},
+				Config: config,
+			}
+			rawName := resourceTask.Name
+			if newName, err := d.hooks.InvokeFilenameHook(params, resourceTask.Name); err != nil {
+				d.logWarn("onFilename hook 执行失败: %v", err)
+			} else if newName != "" {
+				resourceTask.Name = newName
+				d.logInfo("task %d resource %d onFilename hook 应用: %q -> %q",
+					taskID, resource.ID, rawName, newName)
+			}
+		}
+
+		nameUpdated, err := d.processOutputFilename(resourceTask, candidate.endpoint.URL, prepared, originalDBName)
 		if err != nil {
 			return "", err
 		}
@@ -510,6 +554,7 @@ func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath stri
 			err = d.downloadFile(ctx, candidate.driver, candidate.endpoint, filePath, resource.ID, prepared, taskID)
 		}
 		if err == nil {
+			d.logInfo("task %d resource %d 数据传输完成: %s", taskID, resource.ID, filePath)
 			if prepared.Size <= 0 {
 				if fileInfo, statErr := os.Stat(filePath); statErr == nil {
 					if err := d.updateResourceSize(taskID, resource.ID, fileInfo.Size()); err != nil {
@@ -518,6 +563,7 @@ func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath stri
 				}
 			}
 			if store, ok := d.store.(ResourceStore); ok {
+				d.logInfo("task %d resource %d 持久化资源状态中...", taskID, resource.ID)
 				if err := store.FinishResource(resource.ID); err != nil {
 					return "", fmt.Errorf("完成资源持久化失败: %w", err)
 				}
@@ -534,46 +580,135 @@ func (d *Engine) downloadResource(ctx context.Context, taskID int, savePath stri
 	return "", fmt.Errorf("所有下载端点均不可用: %s", strings.Join(endpointErrors, "; "))
 }
 
-func (d *Engine) applyContentTypeFilename(task *Task, endpointURL string, prepared PreparedResource) (bool, error) {
-	if task == nil || filepath.Ext(strings.TrimSpace(task.Name)) != "" {
+// processOutputFilename 统一处理下载资源输出文件名。
+// 在 filenameTemplate 和 onFilename hook 处理后调用，完成：
+//  1. 分离目录和基础文件名
+//  2. 处理文件扩展名
+//  3. 清理并截断基础文件名（保留目录部分）
+//  4. 拼回完整路径并更新任务/资源信息到数据库
+//
+// 每步处理均输出日志，便于问题排查。
+func (d *Engine) processOutputFilename(task *Task, endpointURL string, prepared PreparedResource, originalDBName string) (bool, error) {
+	if task == nil || task.ResourceID <= 0 {
 		return false, nil
 	}
-	extension := extensionForContentType(prepared.ContentType)
-	if extension == "" {
+
+	rawName := strings.TrimSpace(task.Name)
+	if rawName == "" {
 		return false, nil
 	}
-	if task.ResourceID > 0 {
+
+	// 步骤 1: 分离目录和基础文件名
+	dir, filename := filepath.Split(rawName)
+	d.logInfo("task %d resource %d 输出文件名处理开始: raw=%q dir=%q base=%q",
+		task.ID, task.ResourceID, rawName, dir, filename)
+
+	// 步骤 2: 确定扩展名（优先使用文件名中已有的扩展名，否则从 Content-Type 推断）
+	existingExt := filepath.Ext(filename)
+	baseWithoutExt := filename
+	if existingExt != "" {
+		baseWithoutExt = filename[:len(filename)-len(existingExt)]
+	}
+	if existingExt == "" {
+		existingExt = extensionForContentType(prepared.ContentType)
+		if existingExt != "" {
+			d.logInfo("task %d resource %d 从 Content-Type 推断扩展名: %s", task.ID, task.ResourceID, existingExt)
+		}
+	}
+	if existingExt == "" {
+		existingExt = filepath.Ext(originalDBName)
+		if existingExt != "" {
+			d.logInfo("task %d resource %d 从数据库原始名称推断扩展名: %s", task.ID, task.ResourceID, existingExt)
+		}
+	}
+
+	// 步骤 3: 检查是否已存在下载分片（断点续传跳过文件名处理）
+	if existingExt != "" && task.ResourceID > 0 {
 		segments, err := d.store.LoadSegmentInfo(task.ResourceID)
 		if err != nil {
 			return false, fmt.Errorf("读取已有下载分片失败: %w", err)
 		}
 		if len(segments) > 0 {
+			d.logInfo("task %d resource %d 已有 %d 个分片，跳过文件名处理(断点续传)",
+				task.ID, task.ResourceID, len(segments))
 			return false, nil
 		}
 	}
-	currentPath, err := taskFilePath(task, endpointURL)
-	if err != nil {
-		return false, err
+
+	// 步骤 4: 检查输出文件是否已存在
+	if existingExt != "" {
+		tmpTask := &Task{
+			ID: task.ID, Name: dir + baseWithoutExt + existingExt,
+			SavePath: task.SavePath, ResourceID: task.ResourceID,
+		}
+		if currentPath, err := taskFilePath(tmpTask, endpointURL); err == nil {
+			if fileInfo, statErr := os.Stat(currentPath); statErr == nil && fileInfo.Size() > 0 {
+				d.logInfo("task %d resource %d 输出文件已存在: %s，跳过文件名处理",
+					task.ID, task.ResourceID, currentPath)
+				task.Name = dir + baseWithoutExt + existingExt
+				return false, nil
+			}
+		}
 	}
-	if fileInfo, err := os.Stat(currentPath); err == nil && fileInfo.Size() > 0 {
+
+	// 步骤 5: 如果没有扩展名，仍然用回退到的扩展名更新 task.Name，确保后续 taskFilePath 写出正确文件名
+	if existingExt == "" {
+		d.logInfo("task %d resource %d 无法确定扩展名，跳过文件名处理", task.ID, task.ResourceID)
+		return false, nil
+	}
+	task.Name = dir + baseWithoutExt + existingExt
+
+	// 步骤 6: 清理并截断基础文件名（保留目录部分不变）
+	fp := NewFilenameProcessor("", nil)
+	cleanBase, err := fp.SanitizeFilename(baseWithoutExt)
+	if err != nil {
+		return false, fmt.Errorf("清理文件名失败: %w", err)
+	}
+	d.logInfo("task %d resource %d 文件名清理: %q -> %q", task.ID, task.ResourceID, baseWithoutExt, cleanBase)
+
+	// 截断过长文件名（235字节限制需包含扩展名）
+	maxBaseLen := fp.maxNameLength - len(existingExt)
+	if maxBaseLen > 0 && len(cleanBase) > maxBaseLen {
+		truncated := fp.truncateString(cleanBase, maxBaseLen)
+		d.logInfo("task %d resource %d 文件名超长截断: %d -> %d 字节",
+			task.ID, task.ResourceID, len(cleanBase), len(truncated))
+		cleanBase = truncated
+	}
+	if cleanBase == "" {
+		return false, fmt.Errorf("文件名仅包含无效字符")
+	}
+
+	// 步骤 7: 拼回完整路径
+	resourceName := dir + cleanBase + existingExt
+	d.logInfo("task %d resource %d 最终输出文件名: %q (base=%q ext=%q dir=%q)",
+		task.ID, task.ResourceID, resourceName, cleanBase, existingExt, dir)
+
+	// 步骤 8: 与数据库原始名称比对，名称未变化则跳过 DB 更新
+	if resourceName == originalDBName {
+		d.logInfo("task %d resource %d 文件名与数据库一致，跳过数据库更新", task.ID, task.ResourceID)
+		task.Name = resourceName
 		return false, nil
 	}
 
-	previousName := task.Name
-	resourceName, err := NewFilenameProcessor("", nil).AppendExtension(previousName, extension)
-	if err != nil {
-		return false, fmt.Errorf("生成下载文件名失败: %w", err)
-	}
+	// 步骤 9: 更新资源名到数据库并触发回调
 	update := OutputNameUpdate{
 		TaskID:       task.ID,
 		ResourceID:   task.ResourceID,
 		ResourceName: resourceName,
 	}
+	d.logInfo("task %d resource %d 尝试更新数据库资源名: task_id=%d resource_id=%d resource_name=%q",
+		task.ID, task.ResourceID, update.TaskID, update.ResourceID, update.ResourceName)
 	if store, ok := d.store.(OutputNameStore); ok {
+		d.logInfo("task %d resource %d store 实现了 OutputNameStore，调用 UpdateOutputName", task.ID, task.ResourceID)
 		if err := store.UpdateOutputName(update); err != nil {
-			return false, fmt.Errorf("更新下载文件名失败: %w", err)
+			return false, fmt.Errorf("更新下载文件名到数据库失败: %w", err)
 		}
+		d.logInfo("task %d resource %d 数据库资源名已更新: %q -> %q",
+			task.ID, task.ResourceID, originalDBName, resourceName)
+	} else {
+		d.logWarn("task %d resource %d store 未实现 OutputNameStore，跳过数据库更新", task.ID, task.ResourceID)
 	}
+
 	task.Name = resourceName
 	return true, nil
 }
@@ -656,7 +791,13 @@ func prepareWithRetry(ctx context.Context, driver ProtocolDriver, endpoint Endpo
 	return PreparedResource{}, lastErr
 }
 
-func (d *Engine) applyFilenameTemplate(task *Task, endpointURL string) string {
+func (d *Engine) applyFilenameTemplate(task *Task, endpointURL string, meta map[string]string) string {
+	// If template contains {{var}} syntax, use shared template var replacement
+	if strings.Contains(task.FilenameTemplate, "{{") {
+		return util.ReplaceTemplateVars(task.FilenameTemplate, meta)
+	}
+
+	// Fall through to JS VM evaluation for expression-based templates
 	urlBasename := ""
 	if u, err := url.Parse(endpointURL); err == nil {
 		urlBasename = filepath.Base(u.Path)
@@ -857,7 +998,7 @@ func (d *Engine) downloadFile(
 
 		err = d.copyReader(ctx, reader, file, prepared.Size, &downloaded, func(total, speed int64) error {
 			return d.persistProgress(taskID, resourceID, segments[0].ID, total, speed)
-		})
+		}, taskID, resourceID)
 		closeErr := errors.Join(reader.Close(), file.Close())
 		if err == nil {
 			err = closeErr
@@ -894,10 +1035,14 @@ func (d *Engine) copyReader(
 	expectedSize int64,
 	downloaded *int64,
 	onProgress func(total, speed int64) error,
+	taskID int,
+	resourceID int,
 ) error {
 	buf := make([]byte, 32*1024)
 	lastProgress := time.Now()
+	lastLog := time.Now()
 	lastDownloaded := *downloaded
+	lastLogDownloaded := *downloaded
 	for {
 		if err := context.Cause(ctx); err != nil {
 			_ = onProgress(*downloaded, 0)
@@ -932,6 +1077,20 @@ func (d *Engine) copyReader(
 			}
 			lastProgress = now
 			lastDownloaded = *downloaded
+		}
+		// Progress log every 3 seconds for diagnostics
+		if now.Sub(lastLog) >= progressLogInterval {
+			if expectedSize > 0 {
+				pct := float64(*downloaded) * 100 / float64(expectedSize)
+				logSpeed := calcSpeed(lastLog, lastLogDownloaded, now, *downloaded)
+				d.logInfo("task %d resource %d 下载进度: %d/%d (%.1f%%) speed=%s",
+					taskID, resourceID, *downloaded, expectedSize, pct, formatSpeed(logSpeed))
+			} else {
+				d.logInfo("task %d resource %d 下载进度: %d (大小未知)",
+					taskID, resourceID, *downloaded)
+			}
+			lastLog = now
+			lastLogDownloaded = *downloaded
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
@@ -1020,6 +1179,11 @@ func (d *Engine) downloadSegments(
 		states[i].slot = i
 		states[i].downloaded = segment.Downloaded
 	}
+	lastLog := time.Now()
+	lastLogDownloaded := int64(0)
+	for i := range states {
+		lastLogDownloaded += states[i].downloaded
+	}
 	var firstErr error
 	for progress := range progressCh {
 		if progress.slot < 0 || progress.slot >= len(states) {
@@ -1037,6 +1201,19 @@ func (d *Engine) downloadSegments(
 		if err := d.persistAggregate(taskID, resourceID, segments, states); err != nil && firstErr == nil {
 			firstErr = err
 			cancelWorkers()
+		}
+		// Progress log every 3 seconds for diagnostics
+		if time.Since(lastLog) >= progressLogInterval {
+			var totalDl int64
+			for _, s := range states {
+				totalDl += s.downloaded
+			}
+			pct := float64(totalDl) * 100 / float64(fileSize)
+			logSpeed := calcSpeed(lastLog, lastLogDownloaded, time.Now(), totalDl)
+			d.logInfo("task %d resource %d 分片下载进度: %d/%d (%.1f%%) speed=%s segments=%d",
+				taskID, resourceID, totalDl, fileSize, pct, formatSpeed(logSpeed), len(segments))
+			lastLog = time.Now()
+			lastLogDownloaded = totalDl
 		}
 	}
 	if ctx.Err() != nil {
@@ -1191,12 +1368,66 @@ func (d *Engine) persistAggregate(taskID, resourceID int, segments []Segment, st
 }
 
 func (d *Engine) finishTask(taskID int, filePath string) error {
+	d.logInfo("task %d 写入任务完成状态到数据库...", taskID)
 	if err := d.store.FinishTask(taskID); err != nil {
 		return fmt.Errorf("完成任务持久化失败: %w", err)
 	}
 	d.logInfo("下载完成, 文件: %s", filePath)
+
+	// Post-download hook (async, non-blocking)
+	if d.hooks != nil && d.hooks.HasFinishHook() {
+		go d.invokeFinishHook(taskID, filePath)
+	}
+
 	d.emit(taskID, EventFinished)
 	return nil
+}
+
+func (d *Engine) invokeFinishHook(taskID int, filePathsStr string) {
+	info, err := d.store.LoadTask(taskID)
+	if err != nil {
+		d.logWarn("加载任务 %d 信息失败，跳过 finish hook: %v", taskID, err)
+		return
+	}
+
+	filePaths := strings.Split(filePathsStr, ", ")
+
+	resources := make([]ResourceInfo, 0, len(info.Resources))
+	for _, r := range info.Resources {
+		endpoints := make([]EndpointInfo, 0, len(r.Endpoints))
+		for _, e := range r.Endpoints {
+			endpoints = append(endpoints, EndpointInfo{
+				Protocol: e.Protocol,
+				URL:      e.URL,
+			})
+		}
+		resources = append(resources, ResourceInfo{
+			ID:         r.ID,
+			Name:       r.Name,
+			Kind:       r.ResourceType,
+			Extra:      r.Extra,
+			Endpoints:  endpoints,
+		})
+	}
+
+	config, metadata := parseConfigAndMetadata(info.Config, info.Metadata)
+
+	ctx := &FinishContext{
+		Task: TaskInfo{
+			Name:     info.Name,
+			SavePath: info.SavePath,
+			Config:   config,
+		},
+		Config:    config,
+		Metadata:  metadata,
+		Resources: resources,
+		FilePaths: filePaths,
+		SavePath:  info.SavePath,
+	}
+
+	if err := d.hooks.InvokeFinishHook(ctx); err != nil {
+		d.logWarn("finish hook 执行失败: %v", err)
+	}
 }
 
 func (d *Engine) pauseTask(taskID int) {
@@ -1243,4 +1474,84 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// buildResourceMeta 从 resource.Extra 和 task config 构建简化的 ResourceMeta。
+// resource.Extra 由各平台的 BuildDownloadTask 填充，不同平台的字段不同。
+func buildResourceMeta(extra map[string]string, config map[string]any) ResourceMeta {
+	meta := ResourceMeta{
+		DownloadAt: time.Now().Unix(),
+	}
+	if extra != nil {
+		meta.ID = extra["id"]
+		meta.Title = extra["title"]
+		meta.Spec = extra["spec"]
+		meta.Author = extra["author"]
+		if v, err := strconv.ParseInt(extra["created_at"], 10, 64); err == nil {
+			meta.CreatedAt = v
+		}
+	}
+	if config != nil {
+		if platform, ok := config["platform"].(string); ok {
+			meta.Platform = platform
+		}
+	}
+	return meta
+}
+
+// buildTemplateMeta 从 resource.Extra 和 task config 构建 {{var}} 模板替换的元数据映射。
+func buildTemplateMeta(extra map[string]string, config map[string]any, currentName string) map[string]string {
+	meta := make(map[string]string)
+	meta["download_at"] = time.Now().Format("2006-01-02")
+	meta["filename"] = strings.TrimSuffix(currentName, filepath.Ext(currentName))
+	if extra != nil {
+		meta["id"] = extra["id"]
+		meta["title"] = extra["title"]
+		meta["spec"] = extra["spec"]
+		meta["author"] = extra["author"]
+		meta["created_at"] = extra["created_at"]
+	}
+	return meta
+}
+
+// parseConfigAndMetadata 解析下载配置和内容元数据 JSON。
+// 返回合并后的 config map 和单独的 metadata map。
+func parseConfigAndMetadata(configJSON, metadataJSON string) (map[string]any, map[string]any) {
+	result := make(map[string]any)
+	var meta map[string]any
+	if configJSON != "" {
+		json.Unmarshal([]byte(configJSON), &result)
+	}
+	if metadataJSON != "" {
+		meta = make(map[string]any)
+		if json.Unmarshal([]byte(metadataJSON), &meta) == nil {
+			for k, v := range meta {
+				if _, exists := result[k]; !exists {
+					result[k] = v
+				}
+			}
+		}
+	}
+	return result, meta
+}
+
+// calcSpeed computes download speed (bytes/sec) between two points in time.
+func calcSpeed(t0 time.Time, downloaded0 int64, t1 time.Time, downloaded1 int64) int64 {
+	elapsed := t1.Sub(t0).Seconds()
+	if elapsed <= 0 || downloaded1 <= downloaded0 {
+		return 0
+	}
+	return int64(float64(downloaded1-downloaded0) / elapsed)
+}
+
+// formatSpeed formats a speed value (bytes/sec) into a human-readable string.
+func formatSpeed(bytesPerSec int64) string {
+	if bytesPerSec <= 0 {
+		return "0 B/s"
+	}
+	// Keep it simple: KB/s or MB/s
+	if bytesPerSec >= 1024*1024 {
+		return fmt.Sprintf("%.1f MB/s", float64(bytesPerSec)/(1024*1024))
+	}
+	return fmt.Sprintf("%.0f KB/s", float64(bytesPerSec)/1024)
 }

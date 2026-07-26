@@ -9,6 +9,7 @@ const (
 	TypeBrowseHistoryRecorded = "browsehistory.recorded"
 	TypeServiceCommand        = "service.command"
 	TypeServiceStatusChanged  = "service.status_changed"
+	TypeDownloadTaskFinished  = "downloadtask.finished"
 )
 
 // ProxyAction represents a command to the proxy service.
@@ -60,3 +61,10 @@ type ServiceStatusChanged struct {
 }
 
 func (e ServiceStatusChanged) Type() string { return TypeServiceStatusChanged }
+
+// DownloadTaskFinished is published when a download task finishes.
+type DownloadTaskFinished struct {
+	TaskID int
+}
+
+func (e DownloadTaskFinished) Type() string { return TypeDownloadTaskFinished }

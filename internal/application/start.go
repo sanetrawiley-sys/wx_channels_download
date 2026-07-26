@@ -107,6 +107,7 @@ func Start(cfg *config.Config) {
 	mpRoutes.RegisterRoutes(api_srv.APIClient)
 	api_srv.SubscribeEvents(bus)
 	api_srv.APIClient.SubscribeEvents(bus)
+	webchannels.RegisterLifecycleHooks(bus, b.DB, &logger)
 	admin_srv := admin.NewAdminServer(cfg, b, bus)
 
 	cleanup := func() {

@@ -121,7 +121,7 @@ func (c *APIClient) handleStreamVideo(ctx *gin.Context) {
 				var resource model.DownloadResource
 				if c.db.First(&task, id).Error == nil &&
 					c.db.Where("task_id = ?", id).Order("merge_order ASC, id ASC").First(&resource).Error == nil {
-					path = filepath.Join(task.SavePath, filepath.Base(resource.Name))
+					path = filepath.Join(task.SavePath, resource.Name)
 				}
 			}
 		}

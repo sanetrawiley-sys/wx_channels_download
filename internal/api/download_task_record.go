@@ -17,7 +17,8 @@ type DownloadTaskRecord struct {
 	Name       string                   `json:"name"`
 	Status     int                      `json:"status"`
 	SavePath   string                   `json:"save_path"`
-	ConfigJSON string                   `json:"config_json"`
+	ConfigJSON   string                   `json:"config_json"`
+	MetadataJSON string                   `json:"metadata_json"`
 	URL        string                   `json:"url"`
 	Size       int64                    `json:"size"`
 	Downloaded int64                    `json:"downloaded"`
@@ -197,7 +198,7 @@ func (c *APIClient) buildDownloadTaskRecords(tasks []model.DownloadTaskV1) ([]Do
 		resourceRows := resourcesByTask[task.Id]
 		files := make([]DownloadTaskFileRecord, 0, len(resourceRows))
 		for _, resource := range resourceRows {
-			outputPath := filepath.Join(task.SavePath, filepath.Base(resource.Name))
+			outputPath := filepath.Join(task.SavePath, resource.Name)
 			status := "waiting"
 			switch resource.Status {
 			case 1:
@@ -239,6 +240,7 @@ func (c *APIClient) buildDownloadTaskRecords(tasks []model.DownloadTaskV1) ([]Do
 			Status: task.Status,
 			SavePath:     task.SavePath,
 			ConfigJSON:   task.ConfigJSON,
+			MetadataJSON: task.MetadataJSON,
 			URL:          urlByTask[task.Id],
 			Size:         totalSize,
 			Downloaded:   downloadedByTask[task.Id],

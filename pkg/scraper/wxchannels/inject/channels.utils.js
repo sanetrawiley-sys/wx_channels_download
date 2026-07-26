@@ -63,6 +63,179 @@ async function __wx_channels_decrypt(seed) {
   return decryptor_array;
 }
 
+var WXBase64 = (() => {
+  function bytesToString(bytes) {
+    let encoded = "";
+    for (let i = 0; i < bytes.length; i += 1) {
+      encoded += `%${bytes[i].toString(16)}`;
+    }
+    return decodeURIComponent(encoded);
+  }
+
+  function stringToArrayBuffer(str) {
+    const bytes = [];
+    const n = str.length;
+    for (let i = 0; i < n; i += 1) {
+      let codePoint = str.charCodeAt(i);
+      if (codePoint >= 55296 && codePoint <= 56319 && n > i + 1) {
+        const next = str.charCodeAt(i + 1);
+        if (next >= 56320 && next <= 57343) {
+          codePoint = (codePoint - 55296) * 1024 + next - 56320 + 65536;
+          i += 1;
+        }
+      }
+
+      if (codePoint < 128) {
+        bytes.push(codePoint);
+        continue;
+      }
+      if (codePoint < 2048) {
+        bytes.push((codePoint >> 6) | 192);
+        bytes.push((codePoint & 63) | 128);
+        continue;
+      }
+      if (codePoint < 55296 || (codePoint >= 57344 && codePoint < 65536)) {
+        bytes.push((codePoint >> 12) | 224);
+        bytes.push(((codePoint >> 6) & 63) | 128);
+        bytes.push((codePoint & 63) | 128);
+        continue;
+      }
+      if (codePoint >= 65536 && codePoint <= 1114111) {
+        bytes.push((codePoint >> 18) | 240);
+        bytes.push(((codePoint >> 12) & 63) | 128);
+        bytes.push(((codePoint >> 6) & 63) | 128);
+        bytes.push((codePoint & 63) | 128);
+        continue;
+      }
+      bytes.push(239, 191, 189);
+    }
+    return new Uint8Array(bytes).buffer;
+  }
+
+  function urlEncode(base64Std) {
+    return base64Std
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
+  function urlDecode(base64UrlNoPad) {
+    let s = base64UrlNoPad.replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) {
+      s += "=";
+    }
+    return s;
+  }
+
+  function base64ToArrayBuffer(base64Std) {
+    const bin = window.atob(base64Std);
+    const n = bin.length;
+    const out = new Uint8Array(n);
+    for (let i = 0; i < n; i += 1) {
+      out[i] = bin.charCodeAt(i);
+    }
+    return out.buffer;
+  }
+
+  function arrayBufferToBase64(buf) {
+    let bin = "";
+    const u8 = new Uint8Array(buf);
+    for (let i = 0; i < u8.byteLength; i += 1) {
+      bin += String.fromCharCode(u8[i]);
+    }
+    return window.btoa(bin);
+  }
+
+  function decodeBase64JSON(base64Std) {
+    try {
+      const ab = base64ToArrayBuffer(base64Std);
+      const s = bytesToString(new Uint8Array(ab));
+      return JSON.parse(s);
+    } catch (e) {
+      void e;
+      return {};
+    }
+  }
+
+  function encodeStringBase64(value) {
+    try {
+      const s = typeof value === "string" ? value : JSON.stringify(value);
+      const ab = stringToArrayBuffer(s);
+      return arrayBufferToBase64(ab);
+    } catch (e) {
+      void e;
+      return "";
+    }
+  }
+
+  function decodeBase64String(base64Std) {
+    try {
+      const ab = base64ToArrayBuffer(base64Std);
+      return bytesToString(new Uint8Array(ab));
+    } catch (e) {
+      void e;
+      return "";
+    }
+  }
+
+  function encodeUint64ToBase64(decimalUint64) {
+    try {
+      let n = BigInt(decimalUint64);
+      if (n < 0n || n > 18446744073709551615n) {
+        return "";
+      }
+      const bytes = new Uint8Array(8);
+      for (let i = 7; i >= 0; i -= 1) {
+        bytes[i] = Number(n & 255n);
+        n >>= 8n;
+      }
+      return urlEncode(arrayBufferToBase64(bytes.buffer));
+    } catch (e) {
+      void e;
+      return "";
+    }
+  }
+
+  function decodeBase64ToUint64String(base64UrlNoPad) {
+    try {
+      const base64Std = urlDecode(base64UrlNoPad);
+      const ab = base64ToArrayBuffer(base64Std);
+      let bytes = new Uint8Array(ab);
+      if (bytes.length === 0) {
+        return "";
+      }
+      if (bytes.length < 8) {
+        const padded = new Uint8Array(8);
+        padded.set(bytes, 8 - bytes.length);
+        bytes = padded;
+      } else if (bytes.length > 8) {
+        bytes = bytes.subarray(0, 8);
+      }
+      let n = 0n;
+      for (let i = 0; i < 8; i += 1) {
+        n = (n << 8n) | BigInt(bytes[i]);
+      }
+      return n.toString(10);
+    } catch (e) {
+      void e;
+      return "";
+    }
+  }
+
+  const api = {
+    urlEncode,
+    urlDecode,
+    base64ToArrayBuffer,
+    arrayBufferToBase64,
+    decodeBase64JSON,
+    encodeStringBase64,
+    decodeBase64String,
+    encodeUint64ToBase64,
+    decodeBase64ToUint64String,
+  };
+  return api;
+})();
+
 (() => {
   function get_media_url(media) {
     if (!media) {
@@ -620,17 +793,12 @@ async function __wx_channels_decrypt(seed) {
       (() => {
         const variable = keys[i];
         const methods = variables[variable];
-        // console.log("variable", {
-        //   api: typeof methods.finderGetCommentDetail,
-        //   api2: typeof methods.finderSearch,
-        //   api3: typeof methods.finderLiveUserPage,
-        //   api4: typeof methods.finderGetFollowList,
-        // });
         if (typeof methods.finderGetFollowList === "function") {
           WXAPI4 = methods;
           return;
         }
         if (typeof methods.finderGetCommentDetail === "function") {
+          // console.log("WXU.onAPILoaded", methods);
           WXAPI = methods;
           return;
         }
@@ -646,23 +814,39 @@ async function __wx_channels_decrypt(seed) {
     }
   });
 
-  WXU.onUtilsLoaded((methods) => {
-    Object.assign(WXAPI, methods);
+  Object.defineProperties(WXU, {
+    API: {
+      get() { return WXAPI; },
+      configurable: true,
+      enumerable: true,
+    },
+    API2: {
+      get() { return WXAPI2; },
+      configurable: true,
+      enumerable: true,
+    },
+    API3: {
+      get() { return WXAPI3; },
+      configurable: true,
+      enumerable: true,
+    },
+    API4: {
+      get() { return WXAPI4; },
+      configurable: true,
+      enumerable: true,
+    },
+    Base64: {
+      get() { return WXBase64; },
+      configurable: true,
+      enumerable: true,
+    },
+    cur_video: {
+      get() { return __wx_channels_cur_video; },
+      configurable: true,
+      enumerable: true,
+    },
   });
-
   Object.assign(WXU, {
-    get API() {
-      return WXAPI;
-    },
-    get API2() {
-      return WXAPI2;
-    },
-    get API3() {
-      return WXAPI3;
-    },
-    get API4() {
-      return WXAPI4;
-    },
     /**
      * 视频解密
      */
@@ -740,9 +924,6 @@ async function __wx_channels_decrypt(seed) {
      * @returns
      */
     format_feed,
-    get cur_video() {
-      return __wx_channels_cur_video;
-    },
     pause_cur_video: __wx_channels_pause_cur_video,
     play_cur_video: __wx_channels_play_cur_video,
     check_feed_existing: __wx_check_feed_existing,
@@ -984,26 +1165,15 @@ ${payload.key || ""}`,
   async function __wx_channels_handle_download_cover() {
     var [err, profile] = WXU.check_feed_existing();
     if (err) return;
-    var url = profile.cover_url.replace(/^http:/, "https:");
     if (!WXU.config.downloadInFrontend) {
-      var [err, data] = await WXU.downloader.create(
-        {
-          id: profile.id,
-          url,
-          title: profile.title,
-          spec: profile.spec,
-          contact: profile.contact,
-        },
-        {
-          suffix: ".jpg",
-        },
-      );
+      var [err, data] = await WXU.downloader.create(profile, { suffix: ".jpg" });
       if (err) {
         WXU.error({ msg: err.message });
         return;
       }
       return;
     }
+    var url = profile.cover_url.replace(/^http:/, "https:");
     var filename = WXU.build_filename(
       profile,
       null,

@@ -21,7 +21,7 @@ func TestToAccount_Media(t *testing.T) {
 		},
 		ObjectDesc: scraper.ChannelsObjectDesc{
 			Description: "测试视频",
-			MediaType:   4,
+			MediaType:   scraper.MediaTypeVideo,
 			Media: []scraper.ChannelsMediaItem{
 				{
 					URL:          "https://video.example.com/v.mp4",
@@ -123,7 +123,7 @@ func TestToContent_Media(t *testing.T) {
 		},
 		ObjectDesc: scraper.ChannelsObjectDesc{
 			Description: "测试视频",
-			MediaType:   4,
+			MediaType:   scraper.MediaTypeVideo,
 			Media: []scraper.ChannelsMediaItem{
 				{
 					URL:          "https://video.example.com/v.mp4",
@@ -259,7 +259,7 @@ func TestToContent_Picture(t *testing.T) {
 		},
 		ObjectDesc: scraper.ChannelsObjectDesc{
 			Description: "一组美图",
-			MediaType:   2,
+			MediaType:   scraper.MediaTypePicture,
 		},
 	}
 	got, err := ToContent(obj)
@@ -286,7 +286,7 @@ func TestToContent_MediaType9(t *testing.T) {
 		ObjectNonceId: "nonce_replay",
 		Type:          "video",
 		ObjectDesc: scraper.ChannelsObjectDesc{
-			MediaType: 9,
+			MediaType: scraper.MediaTypeLive,
 			Media:     []scraper.ChannelsMediaItem{{URL: "https://example.com/replay.mp4"}},
 		},
 	}

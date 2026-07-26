@@ -29,6 +29,10 @@ func (c *APIClient) handleChannelsPage(ctx *gin.Context) {
 	c.renderInjectedRootHTML(ctx, "channels.html")
 }
 
+func (c *APIClient) handleMigrationPage(ctx *gin.Context) {
+	c.renderInjectedRootHTML(ctx, "migration.html")
+}
+
 func (c *APIClient) renderInjectedRootHTML(ctx *gin.Context, name string) {
 	data, err := frontend.Assets.ReadRoot(name)
 	if err != nil {
@@ -62,6 +66,7 @@ func shouldServeByAPI(path string) bool {
 		path == "/file" ||
 		path == "/preview" ||
 		path == "/channels" ||
+		path == "/migration" ||
 		path == "/admin" ||
 		path == "/influencers" {
 		return true

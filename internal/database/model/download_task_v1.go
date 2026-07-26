@@ -26,6 +26,7 @@ type DownloadTaskV1 struct {
 	Status       int    `gorm:"not null;default:0" json:"status"`
 	SavePath     string `gorm:"not null" json:"save_path"`
 	ConfigJSON   string `gorm:"column:config_json" json:"config_json"`
+	MetadataJSON string `gorm:"column:metadata_json" json:"metadata_json"`
 	ErrorMessage string `gorm:"column:error_message" json:"error_message"`
 	Timestamps
 }
@@ -46,6 +47,7 @@ type DownloadResource struct {
 	Speed        int64  `json:"speed"`
 	Status       int    `json:"status"`
 	MergeOrder   int    `gorm:"column:merge_order;default:0" json:"merge_order"`
+	Extra        string `gorm:"type:text" json:"extra"` // JSON: map[string]string, 用户自定义字段
 	// Stream fields (moved from DownloadTaskV1)
 	StreamURL     string `gorm:"column:stream_url" json:"stream_url"`
 	RecordStart   *int64 `gorm:"column:record_start" json:"record_start"`

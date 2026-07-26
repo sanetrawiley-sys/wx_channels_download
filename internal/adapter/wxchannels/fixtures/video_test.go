@@ -728,6 +728,13 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 
 	// ---- V1 DownloadTaskV1: task-level container ----
 	configJSON, _ := json.Marshal(map[string]any{
+		"download_cover": false,
+		"overwrite":      false,
+		"duplicate":      false,
+		"convert_mp3":    false,
+		"upload_cloud":   false,
+	})
+	metadataJSON, _ := json.Marshal(map[string]any{
 		"platform":    content.PlatformId,
 		"external_id": content.ExternalId,
 		"nonce_id":    content.ExternalId2,
@@ -738,11 +745,12 @@ func TestDownloadFlow_FromVideoFeedJSON(t *testing.T) {
 	})
 	tmpTaskId := 1
 	task := model.DownloadTaskV1{
-		Id:         tmpTaskId,
-		Name:       title,
-		Status:     model.TaskStatusWaiting,
-		SavePath:   "/downloads/wx_channels",
-		ConfigJSON: string(configJSON),
+		Id:           tmpTaskId,
+		Name:         title,
+		Status:       model.TaskStatusWaiting,
+		SavePath:     "/downloads/wx_channels",
+		ConfigJSON:   string(configJSON),
+		MetadataJSON: string(metadataJSON),
 	}
 	if task.Id != 1 {
 		t.Errorf("task.Id = %d, want 1", task.Id)
@@ -1036,17 +1044,25 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 	// ---- Create V1 DownloadTaskV1: task-level container ----
 	taskId := 100
 	taskConfig, _ := json.Marshal(map[string]any{
+		"download_cover": false,
+		"overwrite":      false,
+		"duplicate":      false,
+		"convert_mp3":    false,
+		"upload_cloud":   false,
+	})
+	taskMeta, _ := json.Marshal(map[string]any{
 		"platform":    platformId,
 		"external_id": content.ExternalId,
 		"nonce_id":    content.ExternalId2,
 		"spec":        spec,
 	})
 	task := model.DownloadTaskV1{
-		Id:         taskId,
-		Name:       content.Title,
-		Status:     model.TaskStatusWaiting,
-		SavePath:   "/downloads/wx_channels",
-		ConfigJSON: string(taskConfig),
+		Id:           taskId,
+		Name:         content.Title,
+		Status:       model.TaskStatusWaiting,
+		SavePath:     "/downloads/wx_channels",
+		ConfigJSON:   string(taskConfig),
+		MetadataJSON: string(taskMeta),
 	}
 
 	// ---- Create three V1 DownloadResources (one per file type) ----
@@ -1172,19 +1188,23 @@ func TestDownloadFlowWithSubtasks_FromVideoFeedJSON(t *testing.T) {
 		}
 	}
 
-	// 7. ConfigJSON carries key signals for lineage resolution
+	// 7. MetadataJSON carries content lineage signals; ConfigJSON carries download settings
 	var cfg map[string]any
 	if err := json.Unmarshal([]byte(task.ConfigJSON), &cfg); err != nil {
 		t.Fatalf("task.ConfigJSON is not valid JSON: %v", err)
 	}
-	if cfg["platform"] != platformId {
-		t.Errorf("ConfigJSON.platform = %v, want %q", cfg["platform"], platformId)
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(task.MetadataJSON), &meta); err != nil {
+		t.Fatalf("task.MetadataJSON is not valid JSON: %v", err)
 	}
-	if cfg["external_id"] != content.ExternalId {
-		t.Errorf("ConfigJSON.external_id = %v, want %q", cfg["external_id"], content.ExternalId)
+	if meta["platform"] != platformId {
+		t.Errorf("MetadataJSON.platform = %v, want %q", meta["platform"], platformId)
 	}
-	if cfg["spec"] != spec {
-		t.Errorf("ConfigJSON.spec = %v, want %q", cfg["spec"], spec)
+	if meta["external_id"] != content.ExternalId {
+		t.Errorf("MetadataJSON.external_id = %v, want %q", meta["external_id"], content.ExternalId)
+	}
+	if meta["spec"] != spec {
+		t.Errorf("MetadataJSON.spec = %v, want %q", meta["spec"], spec)
 	}
 
 	t.Logf("=== Multi-file Download Tree (V1) ===")

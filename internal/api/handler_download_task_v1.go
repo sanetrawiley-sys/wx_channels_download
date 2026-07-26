@@ -16,6 +16,7 @@ import (
 
 	"wx_channel/internal/database/model"
 	"wx_channel/internal/download/registry"
+	"wx_channel/pkg/hermes"
 	result "wx_channel/internal/util"
 )
 
@@ -35,11 +36,13 @@ type CreateDownloadTaskV1Body struct {
 type DownloadConfig struct {
 	SavePath      string `json:"save_path"`
 	Filename      string `json:"filename"`
-	Spec          string `json:"spec"`
-	Suffix        string `json:"suffix"`
+	Spec          json.RawMessage `json:"spec"`
+	Suffix        string `json:"suffix"`       // 文件后缀，如 ".mp3" 表示下载后转换为 mp3
 	DownloadCover bool   `json:"download_cover"`
 	Overwrite     bool   `json:"overwrite"`
-	Duplicate bool   `json:"duplicate"`
+	Duplicate     bool   `json:"duplicate"`
+	ConvertMP3    bool   `json:"convert_mp3"`  // 下载后转换为 mp3
+	UploadCloud   bool   `json:"upload_cloud"` // 下载后上传云存储
 }
 
 // taskV1IDBody 通用 task_id 请求体
@@ -106,9 +109,16 @@ func downloadTaskSavePath(saveDir string) string {
 // Hermes 通过 Store 接口管理所有内部状态（连接、状态变更、日志）并通过 EventHandler 回调触发广播。
 func (c *APIClient) startCreatedDownloadTask(taskID int) error {
 	if c.downloader == nil {
+		c.logger.Error().Int("task_id", taskID).Msg("Hermes 下载器未初始化，无法启动下载任务")
 		return fmt.Errorf("Hermes 下载器未初始化")
 	}
-	return c.downloader.Start(taskID)
+	c.logger.Debug().Int("task_id", taskID).Msg("将下载任务提交到 Hermes 调度器")
+	if err := c.downloader.Start(taskID); err != nil {
+		c.logger.Error().Int("task_id", taskID).Err(err).Msg("Hermes 调度器启动下载任务失败")
+		return err
+	}
+	c.logger.Info().Int("task_id", taskID).Msg("下载任务已提交到 Hermes 调度队列")
+	return nil
 }
 
 // prepareDownloadTaskV1Single 预览单个平台下载任务（不写入数据库、不启动下载），返回将要创建的任务信息。
@@ -127,13 +137,18 @@ func (c *APIClient) prepareDownloadTaskV1Single(body CreateDownloadTaskV1Body) (
 		return nil, fmt.Errorf("准备保存目录失败: %w", err)
 	}
 
+	convertMP3 := body.Config.ConvertMP3 || strings.EqualFold(body.Config.Suffix, ".mp3")
+
 	info, content, account, err := h.BuildDownloadTask(body.Content, registry.DownloadConfig{
 		SavePath:      saveDir,
 		Filename:      body.Config.Filename,
-		Spec:          body.Config.Spec,
+		Spec:          specFromJSON(body.Config.Spec),
+		Suffix:        body.Config.Suffix,
 		DownloadCover: body.Config.DownloadCover,
-		Overwrite: body.Config.Overwrite,
-		Duplicate: body.Config.Duplicate,
+		Overwrite:     body.Config.Overwrite,
+		Duplicate:     body.Config.Duplicate,
+		ConvertMP3:    convertMP3,
+		UploadCloud:   body.Config.UploadCloud,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("构建下载任务失败: %w", err)
@@ -430,8 +445,11 @@ func (c *APIClient) deleteTaskWithFiles(taskID int) error {
 
 // createDownloadTaskV1Single 创建单个平台下载任务，返回结果数据或错误。
 func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (gin.H, error) {
+	c.logger.Debug().Str("platform", body.Platform).Msg("开始处理单个下载任务创建请求")
+
 	// 数据库未初始化
 	if c.db == nil {
+		c.logger.Error().Msg("数据库未初始化，无法创建下载任务")
 		return nil, fmt.Errorf("应用未初始化，数据库不可用")
 	}
 
@@ -442,6 +460,7 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 	// 根据平台获取对应的处理器
 	h := registry.Get(body.Platform)
 	if h == nil {
+		c.logger.Warn().Str("platform", body.Platform).Msg("不支持的平台")
 		return nil, fmt.Errorf("不支持的平台: %s", body.Platform)
 	}
 
@@ -450,23 +469,32 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 		return nil, fmt.Errorf("准备保存目录失败: %w", err)
 	}
 
+	// suffix ".mp3" 等同于 convert_mp3: true
+	convertMP3 := body.Config.ConvertMP3 || strings.EqualFold(body.Config.Suffix, ".mp3")
+
 	// 调用平台处理器构建下载模型
 	info, content, account, err := h.BuildDownloadTask(body.Content, registry.DownloadConfig{
 		SavePath:      saveDir,
 		Filename:      body.Config.Filename,
-		Spec:          body.Config.Spec,
+		Spec:          specFromJSON(body.Config.Spec),
+		Suffix:        body.Config.Suffix,
 		DownloadCover: body.Config.DownloadCover,
-		Overwrite: body.Config.Overwrite,
-		Duplicate: body.Config.Duplicate,
+		Overwrite:     body.Config.Overwrite,
+		Duplicate:     body.Config.Duplicate,
+		ConvertMP3:    convertMP3,
+		UploadCloud:   body.Config.UploadCloud,
 	})
 	if err != nil {
+		c.logger.Error().Str("platform", body.Platform).Err(err).Msg("平台构建下载任务失败")
 		return nil, fmt.Errorf("构建下载任务失败: %w", err)
 	}
 	if info == nil {
+		c.logger.Warn().Str("platform", body.Platform).Msg("平台未返回下载任务信息")
 		return nil, fmt.Errorf("构建下载任务失败: 平台未返回下载任务")
 	}
 
 	resourceInfos := info.Resources
+	c.logger.Debug().Str("platform", body.Platform).Str("task_name", info.Task.Name).Int("resource_count", len(resourceInfos)).Msg("平台下载任务构建成功")
 	if len(resourceInfos) == 0 {
 		resourceInfos = []registry.DownloadResourceInfo{{
 			Resource:  info.Resource,
@@ -495,6 +523,16 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 		return resp, nil
 	}
 
+	// onTaskCreate hook: 用户可以在写入 DB 前修改资源名、过滤资源等
+	if c.hookManager != nil && c.hookManager.HasCreateHook() {
+		taskInput := buildTaskInput(info, body.Config)
+		modified, err := c.hookManager.InvokeCreateHook(taskInput)
+		if err != nil {
+			return nil, fmt.Errorf("onTaskCreate hook 执行失败: %w", err)
+		}
+		applyTaskInputModifications(info, modified)
+	}
+
 	// 写入数据库
 	now := time.Now().UnixMilli()
 	if info.Task.CreatedAt == 0 {
@@ -502,7 +540,19 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 	}
 	info.Task.UpdatedAt = now
 	if err := c.db.Create(&info.Task).Error; err != nil {
+		c.logger.Error().Str("platform", body.Platform).Err(err).Msg("下载任务写入数据库失败")
 		return nil, fmt.Errorf("创建下载任务失败: %w", err)
+	}
+	c.logger.Info().Int("task_id", info.Task.Id).Str("task_name", info.Task.Name).Str("platform", body.Platform).Str("save_path", info.Task.SavePath).Msg("下载任务已写入数据库")
+
+	// 将 Content 关联到下载任务，供后处理管道使用
+	if content != nil {
+		taskID := info.Task.Id
+		content.DownloadTaskId = &taskID
+		content.UpdatedAt = now
+		if err := c.db.Save(content).Error; err != nil {
+			return nil, fmt.Errorf("保存 Content 关联失败: %w", err)
+		}
 	}
 
 	resources := make([]model.DownloadResource, 0, len(resourceInfos))
@@ -558,6 +608,7 @@ func (c *APIClient) createDownloadTaskV1Single(body CreateDownloadTaskV1Body) (g
 func (c *APIClient) handleCreateDownloadTaskV1(ctx *gin.Context) {
 	var req CreateDownloadTaskV1Request
 	if err := ctx.ShouldBindJSON(&req); err != nil {
+		c.logger.Warn().Err(err).Msg("POST /api/v1/download_task/create 请求参数解析失败")
 		result.Err(ctx, 400, "不合法的请求参数: "+err.Error())
 		return
 	}
@@ -566,25 +617,40 @@ func (c *APIClient) handleCreateDownloadTaskV1(ctx *gin.Context) {
 		return
 	}
 
+	c.logger.Info().Int("object_count", len(req.Objects)).Msg("POST /api/v1/download_task/create 收到批量创建下载任务请求")
+
 	var duplicateErr *DuplicateTaskError
 	tasks := make([]gin.H, 0, len(req.Objects))
+	successCount := 0
+	failCount := 0
 	for _, body := range req.Objects {
 		data, err := c.createDownloadTaskV1Single(body)
 		if err != nil {
 			if errors.As(err, &duplicateErr) {
 				// 单个任务冲突：如果是单个请求则返回 409；批量请求中标记失败
 				if len(req.Objects) == 1 {
+					c.logger.Warn().Int("existing_task_id", duplicateErr.ExistingTaskID).Msg("POST /api/v1/download_task/create 任务冲突，已存在")
 					result.Err(ctx, duplicateErr.StatusCode(), duplicateErr.Error())
 					return
 				}
 				tasks = append(tasks, gin.H{"success": false, "error": err.Error(), "duplicate": true, "existing_task_id": duplicateErr.ExistingTaskID})
+				failCount++
 				continue
 			}
+			c.logger.Warn().Str("platform", body.Platform).Err(err).Msg("创建下载任务失败")
 			tasks = append(tasks, gin.H{"success": false, "error": err.Error()})
+			failCount++
 		} else {
 			tasks = append(tasks, gin.H{"success": true, "data": data})
+			successCount++
 		}
 	}
+
+	c.logger.Info().
+		Int("total", len(tasks)).
+		Int("success", successCount).
+		Int("failed", failCount).
+		Msg("POST /api/v1/download_task/create 批量创建下载任务完成")
 
 	result.Ok(ctx, gin.H{"tasks": tasks})
 }
@@ -661,9 +727,11 @@ func (c *APIClient) createDownloadTaskByURLV1Single(body CreateDownloadTaskByURL
 	task.UpdatedAt = now
 
 	if err := c.db.Create(&task).Error; err != nil {
+		c.logger.Error().Str("url", body.URL).Err(err).Msg("URL 下载任务写入数据库失败")
 		return nil, fmt.Errorf("创建下载任务失败: %w", err)
 	}
 
+	c.logger.Info().Int("task_id", task.Id).Str("url", body.URL).Str("save_path", savePath).Msg("URL 下载任务已写入数据库")
 	// 创建资源
 	resource := model.DownloadResource{
 		TaskId:     task.Id,
@@ -713,6 +781,7 @@ func (c *APIClient) createDownloadTaskByURLV1Single(body CreateDownloadTaskByURL
 func (c *APIClient) handleCreateDownloadTaskByURLV1(ctx *gin.Context) {
 	var req CreateDownloadTaskByURLRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
+		c.logger.Warn().Err(err).Msg("POST /api/v1/download_task/create_by_url 请求参数解析失败")
 		result.Err(ctx, 400, "不合法的请求参数: "+err.Error())
 		return
 	}
@@ -721,15 +790,28 @@ func (c *APIClient) handleCreateDownloadTaskByURLV1(ctx *gin.Context) {
 		return
 	}
 
+	c.logger.Info().Int("object_count", len(req.Objects)).Msg("POST /api/v1/download_task/create_by_url 收到批量创建 URL 下载任务请求")
+
 	tasks := make([]gin.H, 0, len(req.Objects))
+	successCount := 0
+	failCount := 0
 	for _, body := range req.Objects {
 		data, err := c.createDownloadTaskByURLV1Single(body)
 		if err != nil {
+			c.logger.Warn().Str("url", body.URL).Err(err).Msg("创建 URL 下载任务失败")
 			tasks = append(tasks, gin.H{"success": false, "error": err.Error()})
+			failCount++
 		} else {
 			tasks = append(tasks, gin.H{"success": true, "data": data})
+			successCount++
 		}
 	}
+
+	c.logger.Info().
+		Int("total", len(tasks)).
+		Int("success", successCount).
+		Int("failed", failCount).
+		Msg("POST /api/v1/download_task/create_by_url 批量创建 URL 下载任务完成")
 
 	result.Ok(ctx, gin.H{"tasks": tasks})
 }
@@ -739,6 +821,7 @@ func (c *APIClient) handleCreateDownloadTaskByURLV1(ctx *gin.Context) {
 func (c *APIClient) handleStartDownloadTaskV1(ctx *gin.Context) {
 	var body taskV1IDBody
 	if err := ctx.ShouldBindJSON(&body); err != nil {
+		c.logger.Warn().Err(err).Msg("POST /api/v1/download_task/start 请求参数解析失败")
 		result.Err(ctx, 400, "不合法的请求参数: "+err.Error())
 		return
 	}
@@ -753,6 +836,7 @@ func (c *APIClient) handleStartDownloadTaskV1(ctx *gin.Context) {
 
 	var task model.DownloadTaskV1
 	if err := c.db.Where("id = ?", body.TaskID).First(&task).Error; err != nil {
+		c.logger.Warn().Int("task_id", body.TaskID).Msg("POST /api/v1/download_task/start 任务不存在")
 		result.Err(ctx, 404, "下载任务不存在")
 		return
 	}
@@ -761,15 +845,21 @@ func (c *APIClient) handleStartDownloadTaskV1(ctx *gin.Context) {
 	if task.Status != model.TaskStatusWaiting &&
 		task.Status != model.TaskStatusPaused &&
 		task.Status != model.TaskStatusFailed {
+		c.logger.Warn().Int("task_id", body.TaskID).Int("current_status", task.Status).Msg("POST /api/v1/download_task/start 当前状态不允许启动")
 		result.Err(ctx, 400, "当前状态不允许启动")
 		return
 	}
 
+	c.logger.Info().Int("task_id", body.TaskID).Str("task_name", task.Name).Int("previous_status", task.Status).Msg("POST /api/v1/download_task/start 收到启动下载任务请求")
+
 	// Hermes 负责状态持久化、日志写入和事件广播。
 	if err := c.downloader.Start(task.Id); err != nil {
+		c.logger.Error().Int("task_id", body.TaskID).Err(err).Msg("启动下载任务失败")
 		result.Err(ctx, 500, "启动下载任务失败: "+err.Error())
 		return
 	}
+	c.logger.Info().Int("task_id", body.TaskID).Str("status", "preparing").Msg("下载任务已启动")
+
 	task.Status = model.TaskStatusPreparing
 
 	result.Ok(ctx, gin.H{"task": task, "status_text": "preparing"})
@@ -1170,4 +1260,118 @@ func (c *APIClient) handleClearDownloadTaskV1(ctx *gin.Context) {
 	}
 
 	result.Ok(ctx, gin.H{"cleared": cleared})
+}
+
+// buildTaskInput 将 DownloadInfo 和 DownloadConfig 转换为 hook 所需的 TaskInput。
+func buildTaskInput(info *registry.DownloadInfo, bodyCfg DownloadConfig) *hermes.TaskInput {
+	taskInfo := hermes.TaskInfo{
+		Name:     info.Task.Name,
+		SavePath: info.Task.SavePath,
+	}
+
+	resources := make([]hermes.ResourceInfo, 0, len(info.Resources))
+	for _, ri := range info.Resources {
+		endpoints := make([]hermes.EndpointInfo, 0, len(ri.Endpoints))
+		for _, ep := range ri.Endpoints {
+			endpoints = append(endpoints, hermes.EndpointInfo{
+				Protocol: ep.Protocol,
+				URL:      ep.URL,
+			})
+		}
+		resources = append(resources, hermes.ResourceInfo{
+			ID:        ri.Resource.Id,
+			Name:      ri.Resource.Name,
+			Kind:      ri.Resource.Kind,
+			Size:      ri.Resource.Size,
+			UniqueID:  ri.Resource.UniqueID,
+			Endpoints: endpoints,
+		})
+	}
+
+	config := map[string]any{
+		"save_path":      bodyCfg.SavePath,
+		"filename":       bodyCfg.Filename,
+		"spec":           specFromJSON(bodyCfg.Spec),
+		"download_cover": bodyCfg.DownloadCover,
+		"overwrite":      bodyCfg.Overwrite,
+		"duplicate":      bodyCfg.Duplicate,
+	}
+
+	// 合并 ConfigJSON 中的下载配置
+	if info.Task.ConfigJSON != "" {
+		var taskCfg map[string]any
+		if json.Unmarshal([]byte(info.Task.ConfigJSON), &taskCfg) == nil {
+			for k, v := range taskCfg {
+				if _, exists := config[k]; !exists {
+					config[k] = v
+				}
+			}
+		}
+	}
+	// 合并 MetadataJSON 中的内容元数据，供 hooks 使用
+	if info.Task.MetadataJSON != "" {
+		var meta map[string]any
+		if json.Unmarshal([]byte(info.Task.MetadataJSON), &meta) == nil {
+			for k, v := range meta {
+				if _, exists := config[k]; !exists {
+					config[k] = v
+				}
+			}
+		}
+	}
+
+	// 解析内容元数据，供 hooks 单独访问
+	metadata := make(map[string]any)
+	if info.Task.MetadataJSON != "" {
+		json.Unmarshal([]byte(info.Task.MetadataJSON), &metadata)
+	}
+
+	return &hermes.TaskInput{
+		Task:      taskInfo,
+		Config:    config,
+		Metadata:  metadata,
+		Resources: resources,
+	}
+}
+
+// applyTaskInputModifications 将 hook 返回的修改应用到 DownloadInfo。
+func applyTaskInputModifications(info *registry.DownloadInfo, modified *hermes.TaskInput) {
+	if modified == nil {
+		return
+	}
+
+	if modified.Task.Name != "" {
+		info.Task.Name = modified.Task.Name
+	}
+	if modified.Task.SavePath != "" {
+		info.Task.SavePath = modified.Task.SavePath
+	}
+
+	for i, modRes := range modified.Resources {
+		if i >= len(info.Resources) {
+			break
+		}
+		if modRes.Name != "" {
+			info.Resources[i].Resource.Name = modRes.Name
+		}
+	}
+}
+
+// specFromJSON 将请求中的 spec 字段转换为 *string，区分三种情况：
+//   - 字段未传入（len==0）→ nil
+//   - 字段为 null（"null"）→ 指向空字符串的指针
+//   - 字段为字符串值 → 指向该字符串的指针
+func specFromJSON(raw json.RawMessage) *string {
+	if len(raw) == 0 {
+		return nil
+	}
+	if string(raw) == "null" {
+		s := ""
+		return &s
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil
+	}
+	return &s
 }

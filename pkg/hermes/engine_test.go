@@ -312,7 +312,7 @@ func TestEngineInfersExtensionFromContentTypeBeforeWriting(t *testing.T) {
 		SavePath:   saveDir,
 	}
 
-	changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"})
+	changed, err := engine.processOutputFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"}, task.Name)
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, "cover.png", task.Name)
@@ -335,7 +335,7 @@ func TestEngineDoesNotGuessExtensionForKnownNamesOrUnknownMIMETypes(t *testing.T
 		{name: "playlist", contentType: "application/vnd.apple.mpegurl"},
 	} {
 		task := &Task{ID: 1, ResourceID: 2, Name: testCase.name, SavePath: filepath.Join(t.TempDir(), testCase.name)}
-		changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: testCase.contentType})
+		changed, err := engine.processOutputFilename(task, "https://example.com/media", PreparedResource{ContentType: testCase.contentType}, task.Name)
 		require.NoError(t, err)
 		assert.False(t, changed, testCase)
 		assert.Equal(t, testCase.name, task.Name)
@@ -353,7 +353,7 @@ func TestEngineDoesNotRenameResumedResource(t *testing.T) {
 		SavePath: filepath.Join(t.TempDir(), "cover"),
 	}
 
-	changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"})
+	changed, err := engine.processOutputFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"}, task.Name)
 	require.NoError(t, err)
 	assert.False(t, changed)
 	assert.Equal(t, "cover", task.Name)
@@ -373,7 +373,7 @@ func TestEngineInfersExtensionForLongFilenames(t *testing.T) {
 				SavePath: filepath.Join(t.TempDir(), name),
 			}
 
-			changed, err := engine.applyContentTypeFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"})
+			changed, err := engine.processOutputFilename(task, "https://example.com/media", PreparedResource{ContentType: "image/png"}, task.Name)
 			require.NoError(t, err)
 			assert.True(t, changed)
 			assert.True(t, strings.HasSuffix(task.Name, ".png"))
@@ -1011,4 +1011,74 @@ func startSlowServer(t *testing.T, totalSize int) *httptest.Server {
 			time.Sleep(30 * time.Millisecond)
 		}
 	}))
+}
+
+// ---------------------------------------------------------------------------
+// Filename template syntax tests
+// ---------------------------------------------------------------------------
+
+func TestApplyFilenameTemplate_CurlyBraceSyntaxWithSubdirectory(t *testing.T) {
+	engine := New(nil, nil, nil, 1, "")
+	task := &Task{
+		Name:             "video.mp4",
+		FilenameTemplate: "{{author}}/{{filename}}_{{spec}}",
+	}
+	meta := map[string]string{
+		"author":   "AuthorName",
+		"filename": "video",
+		"spec":     "1080p",
+	}
+	result := engine.applyFilenameTemplate(task, "https://example.com/video.mp4", meta)
+	assert.Equal(t, "AuthorName/video_1080p", result)
+}
+
+func TestApplyFilenameTemplate_JavascriptExpressionWithoutCurlyBrace(t *testing.T) {
+	engine := New(nil, nil, nil, 1, "")
+	task := &Task{
+		ID:               42,
+		Name:             "video",
+		FilenameTemplate: "name + '_' + task_id",
+	}
+	result := engine.applyFilenameTemplate(task, "https://example.com/video.mp4", nil)
+	assert.Equal(t, "video_42", result)
+}
+
+func TestApplyFilenameTemplate_PlainStringWithoutCurlyBraces(t *testing.T) {
+	// A JS string literal without {{}} falls through to JS VM evaluation.
+	engine := New(nil, nil, nil, 1, "")
+	task := &Task{
+		Name:             "video",
+		FilenameTemplate: "'hardcoded_name'",
+	}
+	result := engine.applyFilenameTemplate(task, "https://example.com/video.mp4", nil)
+	assert.Equal(t, "hardcoded_name", result)
+}
+
+func TestBuildTemplateMeta(t *testing.T) {
+	extra := map[string]string{
+		"id":         "obj_123",
+		"title":      "My Video",
+		"spec":       "1080p",
+		"author":     "AuthorName",
+		"created_at": "1700000000",
+	}
+	config := map[string]any{
+		"platform": "wxchannels",
+	}
+
+	meta := buildTemplateMeta(extra, config, "video.mp4")
+
+	assert.Equal(t, "obj_123", meta["id"])
+	assert.Equal(t, "My Video", meta["title"])
+	assert.Equal(t, "1080p", meta["spec"])
+	assert.Equal(t, "AuthorName", meta["author"])
+	assert.Equal(t, "1700000000", meta["created_at"])
+	assert.Equal(t, "video", meta["filename"])
+	assert.NotEmpty(t, meta["download_at"])
+}
+
+func TestBuildTemplateMeta_NilExtra(t *testing.T) {
+	meta := buildTemplateMeta(nil, nil, "video.mp4")
+	assert.Equal(t, "video", meta["filename"])
+	assert.NotEmpty(t, meta["download_at"])
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +32,8 @@ import (
 )
 
 type APIClient struct {
-	downloader *hermes.Engine
+	downloader  *hermes.Engine
+	hookManager *hermes.HookManager
 	// official      *officialaccount.OfficialAccountClient
 	// channels      *channels.ChannelsClient
 	status_ws    *download.StatusHub
@@ -95,12 +98,33 @@ func NewAPIClient(cfg *APIConfig, parent_logger *zerolog.Logger, db *gorm.DB, st
 		channelsUploadService: channelsUploadService,
 	}
 
-	apiClient.downloader = hermes.New(&dbTaskStore{db: db},
+	hookManager := hermes.NewHookManager()
+	hookScript := cfg.HooksScript
+	if hookScript == "" {
+		conventionPath := filepath.Join(cfg.WorkDir, "hooks.js")
+		if _, err := os.Stat(conventionPath); err == nil {
+			hookScript = conventionPath
+		}
+	}
+	if hookScript != "" {
+		if err := hookManager.Load(hookScript); err != nil {
+			logger.Warn().Err(err).Str("path", hookScript).Msg("加载 hook 脚本失败")
+		}
+	}
+
+	apiClient.downloader = hermes.New(&dbTaskStore{db: db, logger: &logger},
 		&zerologAdapter{logger: &logger},
 		func(taskID int, event hermes.EventType) {
 			logger.Debug().Int("task_id", taskID).Str("event", string(event)).Msg("Hermes task event")
 			apiClient.broadcastDownloadTaskUpsert([]int{taskID})
+			if event == hermes.EventFinished && apiClient.bus != nil {
+				go func() {
+					apiClient.bus.Publish(events.DownloadTaskFinished{TaskID: taskID})
+				}()
+			}
 		}, cfg.MaxRunning, cfg.FilenameTemplate)
+	apiClient.hookManager = hookManager
+	apiClient.downloader.SetHooks(hookManager)
 	apiClient.downloader.RegisterProtocol(protocol.NewHTTPDriver())
 
 	status_ws.OnConnected = func(wsClient *download.StatusWSClient) {
@@ -352,7 +376,14 @@ func (c *APIClient) handleChannelSrcAsset(ctx *gin.Context) {
 // ---------------------------------------------------------------------------
 
 type dbTaskStore struct {
-	db *gorm.DB
+	db     *gorm.DB
+	logger *zerolog.Logger
+}
+
+func (s *dbTaskStore) debug(format string, args ...interface{}) {
+	if s.logger != nil {
+		s.logger.Info().Msgf("[dbTaskStore] "+format, args...)
+	}
 }
 
 var _ hermes.Store = (*dbTaskStore)(nil)
@@ -422,11 +453,13 @@ func (s *dbTaskStore) LoadTask(taskID int) (*hermes.Task, error) {
 		if len(resourceEndpoints) == 0 {
 			return nil, fmt.Errorf("资源 %d 没有已启用的下载端点", resource.Id)
 		}
+		extra := parseExtra(resource.Extra)
 		resourceInfos = append(resourceInfos, hermes.Resource{
 			ID:           resource.Id,
 			Name:         resource.Name,
 			ResourceType: resource.ResourceType,
 			Endpoints:    resourceEndpoints,
+			Extra:        extra,
 		})
 	}
 	primary := resourceInfos[0]
@@ -438,6 +471,8 @@ func (s *dbTaskStore) LoadTask(taskID int) (*hermes.Task, error) {
 		ResourceID: primary.ID,
 		Endpoints:  primary.Endpoints,
 		Resources:  resourceInfos,
+		Config:   task.ConfigJSON,
+		Metadata: task.MetadataJSON,
 	}, nil
 }
 
@@ -525,14 +560,30 @@ func (s *dbTaskStore) UpdateResourceSize(taskID int, size int64) error {
 }
 
 func (s *dbTaskStore) UpdateOutputName(update hermes.OutputNameUpdate) error {
+	s.debug("UpdateOutputName 被调用: task_id=%d resource_id=%d task_name=%q resource_name=%q save_path=%q",
+		update.TaskID, update.ResourceID, update.TaskName, update.ResourceName, update.SavePath)
+
 	if update.TaskID <= 0 || update.ResourceID <= 0 || strings.TrimSpace(update.ResourceName) == "" {
+		s.debug("UpdateOutputName 参数无效，跳过更新")
 		return errors.New("下载文件名更新参数无效")
 	}
+
 	now := time.Now().UnixMilli()
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.DownloadResource{}).Where("id = ? AND task_id = ?", update.ResourceID, update.TaskID).
-			Updates(map[string]any{"name": update.ResourceName, "updated_at": now}).Error; err != nil {
-			return err
+	s.debug("UpdateOutputName 开始事务更新 download_resource: id=%d task_id=%d name=%q",
+		update.ResourceID, update.TaskID, update.ResourceName)
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.DownloadResource{}).
+			Where("id = ? AND task_id = ?", update.ResourceID, update.TaskID).
+			Updates(map[string]any{"name": update.ResourceName, "updated_at": now})
+		if result.Error != nil {
+			s.debug("UpdateOutputName download_resource 更新失败: %v", result.Error)
+			return result.Error
+		}
+		s.debug("UpdateOutputName download_resource RowsAffected=%d", result.RowsAffected)
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("更新资源名未影响任何行: resource_id=%d task_id=%d new_name=%q",
+				update.ResourceID, update.TaskID, update.ResourceName)
 		}
 		if update.TaskName == "" {
 			return nil
@@ -540,6 +591,12 @@ func (s *dbTaskStore) UpdateOutputName(update hermes.OutputNameUpdate) error {
 		return tx.Model(&model.DownloadTaskV1{}).Where("id = ?", update.TaskID).
 			Updates(map[string]any{"name": update.TaskName, "save_path": update.SavePath, "updated_at": now}).Error
 	})
+	if err != nil {
+		s.debug("UpdateOutputName 事务失败: %v", err)
+	} else {
+		s.debug("UpdateOutputName 事务成功")
+	}
+	return err
 }
 
 func (s *dbTaskStore) UpdateResourceProgress(resourceID int, downloaded int64, speed int64) error {
@@ -673,4 +730,16 @@ func (s *dbTaskStore) LoadSegmentInfo(resourceID int) ([]hermes.Segment, error) 
 		}
 	}
 	return infos, nil
+}
+
+// parseExtra 将 JSON 字符串解析为 map[string]string，用于透传用户自定义字段。
+func parseExtra(raw string) map[string]string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var attrs map[string]string
+	if err := json.Unmarshal([]byte(raw), &attrs); err != nil {
+		return nil
+	}
+	return attrs
 }
