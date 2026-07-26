@@ -1203,7 +1203,7 @@ ${payload.key || ""}`,
       if (WXU.config.defaultHighest) {
         return null;
       }
-      if (profile.spec[0]) {
+      if (Array.isArray(profile.spec) && profile.spec[0]) {
         return profile.spec[0].fileFormat;
       }
       return null;
