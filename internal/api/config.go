@@ -3,71 +3,100 @@ package api
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
-
-	"github.com/adrg/xdg"
-	"github.com/spf13/viper"
 
 	"wx_channel/internal/config"
 )
 
 type APIConfig struct {
-	Version                      string
-	Mode                         string
-	Original                     *config.Config
-	RootDir                      string
-	DownloadDir                  string
-	PlayDoneAudio                bool
-	MaxRunning                   int // 最多同时下载的任务数
-	Protocol                     string
-	Hostname                     string
-	Port                         int
-	RemoteServerEnabled          bool   `json:"remoteServerEnabled"`
-	RemoteServerProtocol         string `json:"remoteServerProtocol"`
-	RemoteServerHostname         string `json:"remoteServerHostname"`
-	RemoteServerPort             int    `json:"remoteServerPort"`
-	RemoteServerMode             bool   `json:"remoteServerMode"` // 是否为服务器模式
-	OfficialAccountRefreshToken  string
-	OfficialAccountTokenFilepath string
-	ChannelsRefreshInterval      int
-	CloudflareSphCookie          string
+	Version                   string
+	Mode                      string
+	Original                  *config.Config
+	RootDir                   string
+	WorkDir                   string
+	LogPath                   string
+	DownloadDir               string
+	PlayDoneAudio             bool
+	MaxRunning                int // maximum number of concurrent download tasks
+	ResourceConcurrency       int // maximum number of resources across running tasks
+	SegmentConcurrency        int // maximum number of segments inside each resource
+	ConnectionConcurrency     int // maximum number of protocol connections across running tasks
+	Protocol                  string
+	Hostname                  string
+	Port                      int
+	RemoteServerEnabled       bool   `json:"remoteServerEnabled"`
+	RemoteServerProtocol      string `json:"remoteServerProtocol"`
+	RemoteServerHostname      string `json:"remoteServerHostname"`
+	RemoteServerPort          int    `json:"remoteServerPort"`
+	CloudflareSphCookie       string
+	CookieUUID                string
+	CookiePassword            string
+	CookieKey                 string
+	FilenameTemplate          string
+	DefaultActionWhenExisting string
+
+	HooksScript string
+
+	DBType     string
+	DBHost     string
+	DBPort     string
+	DBUser     string
+	DBPassword string
+	DBName     string
+	DBPath     string
 }
 
-func NewAPIConfig(c *config.Config, remote_mode bool) *APIConfig {
-	dir := viper.GetString("download.dir")
-	dir = strings.ReplaceAll(dir, "%UserDownloads%", xdg.UserDirs.Download)
-	dir = strings.ReplaceAll(dir, "%CWD%", c.RootDir)
-	dir = filepath.Clean(dir)
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(c.RootDir, dir)
-	}
+func NewAPIConfig(c *config.Config) *APIConfig {
+	dir := c.GetString("download.dir")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		fmt.Printf("Warning: Failed to create download directory: %s, error: %v\n", dir, err)
 	}
-	mp_refresh_token := viper.GetString("mp.refreshToken")
-	mp_token_filepath := viper.GetString("mp.tokenFilepath")
-	cloudflare_sph_cookie := viper.GetString("cloudflare.sphCookie")
+	cloudflare_sph_cookie := c.GetString("cloudflare.sphCookie")
+	resource_concurrency := c.GetInt("download.resourceConcurrency")
+	if resource_concurrency <= 0 {
+		resource_concurrency = 100
+	}
+	segment_concurrency := c.GetInt("download.segmentConcurrency")
+	if segment_concurrency <= 0 {
+		segment_concurrency = 10
+	}
+	connection_concurrency := c.GetInt("download.connectionConcurrency")
+
 	api_cfg := &APIConfig{
-		Version:                      c.Version,
-		Mode:                         c.Mode,
-		Original:                     c,
-		RootDir:                      c.RootDir,
-		DownloadDir:                  dir,
-		PlayDoneAudio:                viper.GetBool("download.playDoneAudio"),
-		MaxRunning:                   3,
-		Protocol:                     viper.GetString("api.protocol"),
-		Hostname:                     viper.GetString("api.hostname"),
-		Port:                         viper.GetInt("api.port"),
-		RemoteServerEnabled:          viper.GetBool("download.remoteServer.enabled"),
-		RemoteServerProtocol:         viper.GetString("download.remoteServer.protocol"),
-		RemoteServerHostname:         viper.GetString("download.remoteServer.hostname"),
-		RemoteServerPort:             viper.GetInt("download.remoteServer.port"),
-		RemoteServerMode:             remote_mode,
-		OfficialAccountTokenFilepath: mp_token_filepath,
-		OfficialAccountRefreshToken:  mp_refresh_token,
-		ChannelsRefreshInterval:      viper.GetInt("channels.refreshInterval"),
-		CloudflareSphCookie:          cloudflare_sph_cookie,
+		Version:               c.Version,
+		Mode:                  c.Mode,
+		Original:              c,
+		RootDir:               c.RootDir,
+		WorkDir:               c.WorkDir,
+		LogPath:               c.LogPath(),
+		DownloadDir:           dir,
+		PlayDoneAudio:         c.GetBool("download.playDoneAudio"),
+		MaxRunning:            c.GetInt("download.maxRunning"),
+		ResourceConcurrency:   resource_concurrency,
+		SegmentConcurrency:    segment_concurrency,
+		ConnectionConcurrency: connection_concurrency,
+		Protocol:              c.GetString("api.protocol"),
+		Hostname:              c.GetString("api.hostname"),
+		Port:                  c.GetInt("api.port"),
+		RemoteServerEnabled:   c.GetBool("download.remoteServer.enabled"),
+		RemoteServerProtocol:  c.GetString("download.remoteServer.protocol"),
+		RemoteServerHostname:  c.GetString("download.remoteServer.hostname"),
+		RemoteServerPort:      c.GetInt("download.remoteServer.port"),
+		CloudflareSphCookie:   cloudflare_sph_cookie,
+		CookieUUID:            c.GetString("cookie.uuid"),
+		CookiePassword:        c.GetString("cookie.password"),
+		CookieKey:             c.GetString("cookie.key"),
+
+		FilenameTemplate:          c.GetString("download.filenameTemplate"),
+		DefaultActionWhenExisting: c.GetString("download.defaultActionWhenExisting"),
+		HooksScript:               c.HookScriptPath,
+
+		DBType:     c.GetString("db.type"),
+		DBHost:     c.GetString("db.host"),
+		DBPort:     c.GetString("db.port"),
+		DBUser:     c.GetString("db.username"),
+		DBPassword: c.GetString("db.password"),
+		DBName:     c.GetString("db.filename"),
+		DBPath:     c.GetString("db.filepath"),
 	}
 	return api_cfg
 }

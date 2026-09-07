@@ -2,13 +2,23 @@ package pages
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"wx_channel/pkg/hash"
 )
+
+func should_ignore(file_path string, ignore_patterns []string) bool {
+	base_name := filepath.Base(file_path)
+	for _, pattern := range ignore_patterns {
+		pattern = strings.TrimPrefix(pattern, "**/")
+		if matched, _ := filepath.Match(pattern, base_name); matched {
+			return true
+		}
+	}
+	return false
+}
 
 // getMimeType returns the appropriate MIME type based on file extension
 func getMimeType(filename string) string {
@@ -164,58 +174,55 @@ func getMimeType(filename string) string {
 	}
 }
 
-func walk(dir string, files_map map[string]FileContainer, dir_start string, ignore_patterns []string) {
+func walk(dir string, files_map map[string]FileContainer, dir_start string, ignore_patterns []string) error {
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		log.Printf("Error reading directory %s: %v", dir, err)
-		return
+		return fmt.Errorf("读取 Pages 资源目录 %s 失败: %w", dir, err)
 	}
 
 	for _, file := range files {
 		file_path := filepath.Join(dir, file.Name())
-		relative_filepath, _ := filepath.Rel(dir_start, file_path)
+		relative_filepath, err := filepath.Rel(dir_start, file_path)
+		if err != nil {
+			return fmt.Errorf("计算 Pages 资源相对路径 %s 失败: %w", file_path, err)
+		}
 
-		// 检查是否应该忽略此文件/目录
+		// Check if this file/directory should be ignored
 		if should_ignore(file_path, ignore_patterns) {
-			fmt.Printf("Ignoring: %s\n", relative_filepath)
 			continue
 		}
 
 		if file.IsDir() {
-			// 递归遍历子目录
-			walk(file_path, files_map, dir_start, ignore_patterns)
+			if err := walk(file_path, files_map, dir_start, ignore_patterns); err != nil {
+				return err
+			}
 		} else {
-			// 处理文件
 			info, err := file.Info()
 			if err != nil {
-				log.Printf("Error getting file info for %s: %v", file_path, err)
-				continue
+				return fmt.Errorf("读取 Pages 资源信息 %s 失败: %w", file_path, err)
 			}
 
-			// 计算文件哈希值
 			file_hash, err := hash.FileHashWithExtension(file_path)
 			if err != nil {
-				log.Printf("Error calculating hash for %s: %v", file_path, err)
-				file_hash = "" // 如果计算失败，设置为空字符串
+				return fmt.Errorf("计算 Pages 资源哈希 %s 失败: %w", file_path, err)
 			}
 
-			// 创建 FileContainer
-			_the_file := FileContainer{
+			container := FileContainer{
 				Filename:    file.Name(),
 				Path:        file_path,
 				SizeInBytes: int(info.Size()),
-				ContentType: getMimeType(file.Name()), // 根据文件类型获取正确的 MIME type
+				ContentType: getMimeType(file.Name()),
 				Hash:        file_hash,
 			}
 
-			files_map[relative_filepath] = _the_file
-			// fmt.Printf("Found: %s (%d bytes, hash: %s)\n", relative_filepath, info.Size(), file_hash)
+			files_map[relative_filepath] = container
 		}
 	}
+	return nil
 }
 
 func Validate(directory string) (map[string]FileContainer, error) {
-	IGNORE_FILES := []string{
+	ignore_files := []string{
 		"_worker.js",
 		"_redirects",
 		"_headers",
@@ -225,24 +232,21 @@ func Validate(directory string) (map[string]FileContainer, error) {
 		"**/node_modules",
 		"**/.git",
 	}
-	if _, err := os.Stat(directory); os.IsNotExist(err) {
-		// log.Fatalf("Directory does not exist: %s", directory)
-		return make(map[string]FileContainer), err
+	directory_info, err := os.Stat(directory)
+	if err != nil {
+		return nil, fmt.Errorf("读取 Pages 资源目录 %s 失败: %w", directory, err)
 	}
-	// 获取绝对路径
+	if !directory_info.IsDir() {
+		return nil, fmt.Errorf("Pages 资源路径不是目录: %s", directory)
+	}
 	abs_filepath, err := filepath.Abs(directory)
 	if err != nil {
-		// log.Fatalf("Error getting absolute path: %v", err)
-		return make(map[string]FileContainer), err
+		return nil, fmt.Errorf("获取 Pages 资源目录绝对路径失败: %w", err)
 	}
 
 	file_map := make(map[string]FileContainer)
-
-	// fmt.Printf("Starting to walk directory: %s\n", abs_filepath)
-	// fmt.Printf("Ignore patterns: %v\n", IGNORE_FILES)
-
-	walk(abs_filepath, file_map, abs_filepath, IGNORE_FILES)
-
-	// fmt.Printf("\nTotal files found: %d\n", len(file_map))
+	if err := walk(abs_filepath, file_map, abs_filepath, ignore_files); err != nil {
+		return nil, err
+	}
 	return file_map, nil
 }

@@ -9,43 +9,89 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"golang.org/x/sys/windows"
+)
+
+var internet_set_option = windows.NewLazySystemDLL("wininet.dll").NewProc("InternetSetOptionW")
+
+const (
+	internet_option_refresh          = 37
+	internet_option_settings_changed = 39
 )
 
 func enable_proxy(args ProxySettings) error {
 	args = merge_default_settings(args)
 	path := `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 	proxy_server_url := fmt.Sprintf("%v:%v", args.Hostname, args.Port)
-	// # 启用代理
-	// reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f
-	// reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:8080" /f
 
-	// 使用 reg 命令替代 powershell，以提高兼容性（支持 Win7）并提升性能
-	cmd := exec.Command("reg", "add", path, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("设置系统代理时发生错误，%v\n", string(output))
+	if err := run_reg_command("add", path, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"); err != nil {
+		return fmt.Errorf("设置系统代理时发生错误，%v", err)
 	}
 
-	cmd = exec.Command("reg", "add", path, "/v", "ProxyServer", "/t", "REG_SZ", "/d", proxy_server_url, "/f")
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("设置 HTTP 代理失败，%v", string(output))
+	if err := run_reg_command("add", path, "/v", "ProxyServer", "/t", "REG_SZ", "/d", proxy_server_url, "/f"); err != nil {
+		return fmt.Errorf("设置 HTTP 代理失败，%v", err)
 	}
-	return nil
+	return notify_proxy_settings_changed()
 }
 
 func disable_proxy(args ProxySettings) error {
 	path := `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
-	// # 禁用代理
-	// reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
 
-	// 使用 reg 命令替代 powershell
-	cmd := exec.Command("reg", "add", path, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("设置 HTTP 代理失败，%v", string(output))
+	if err := run_reg_command("add", path, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"); err != nil {
+		return fmt.Errorf("设置 HTTP 代理失败，%v", err)
+	}
+	return notify_proxy_settings_changed()
+}
+
+func notify_proxy_settings_changed() error {
+	if err := internet_set_option.Find(); err != nil {
+		return fmt.Errorf("failed to load InternetSetOptionW: %w", err)
+	}
+	for _, option := range []uintptr{internet_option_settings_changed, internet_option_refresh} {
+		result, _, call_err := internet_set_option.Call(0, option, 0, 0)
+		if result == 0 {
+			return fmt.Errorf("failed to refresh Windows proxy settings: %w", call_err)
+		}
 	}
 	return nil
+}
+
+// run_reg_command executes a "reg" command (e.g. "reg add ...").
+// If the direct call fails (e.g. due to group policy lock), it retries with
+// elevated privileges via PowerShell Start-Process -Verb RunAs -Wait.
+// This keeps the calling process (HTTP server) alive while only elevating
+// the individual registry operation through a UAC dialog.
+func run_reg_command(args ...string) error {
+	// Attempt 1: direct reg call (no elevation, no UAC prompt)
+	cmd := exec.Command("reg", args...)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	// Attempt 2: elevate just this reg command via PowerShell
+	psCmd := "Start-Process -Verb RunAs -Wait -FilePath 'reg'"
+	for _, arg := range args {
+		psCmd += " -ArgumentList " + powershellEscape(arg)
+	}
+
+	psExec := exec.Command("powershell", "-NoProfile", "-Command", psCmd)
+	output2, err2 := psExec.CombinedOutput()
+	if err2 != nil {
+		return fmt.Errorf(
+			"普通执行失败: %s\n提权执行失败: %s",
+			strings.TrimSpace(string(output)),
+			strings.TrimSpace(string(output2)),
+		)
+	}
+	return nil
+}
+
+// powershellEscape wraps a string in single quotes for use in PowerShell
+// -ArgumentList, doubling any embedded single quotes per PS escaping rules.
+func powershellEscape(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func fetch_cur_proxy(args ProxySettings) (*ProxySettings, error) {
@@ -86,6 +132,12 @@ func fetch_cur_proxy(args ProxySettings) (*ProxySettings, error) {
 
 func get_network_interfaces() (*HardwarePort, error) {
 	return nil, errors.New("not support")
+}
+
+// ProxyTargetDescription has nothing to report on Windows: the proxy lives in the registry and
+// applies globally, so there is no network service to pick and no way to pick the wrong one.
+func ProxyTargetDescription(configured string) (service string, warning string) {
+	return "", ""
 }
 
 func read_reg_value(path string, name string) (string, error) {

@@ -4,7 +4,7 @@ import (
 	_ "embed"
 )
 
-//go:embed certs/SunnyRoot.cer
+//go:embed certs/SunnyNet.cer
 var cert_file []byte
 
 //go:embed certs/private.key
@@ -41,12 +41,12 @@ type Certificate struct {
 	Subject    CertificateSubject
 }
 
-// 获取所有证书
+// Fetch all certificates
 func FetchCertificates() ([]Certificate, error) {
 	return fetchCertificates()
 }
 
-// 根据名称检查是否存在指定证书
+// Check if a certificate with the given name exists
 func CheckHasCertificate(cert_name string) (bool, error) {
 	certificates, err := fetchCertificates()
 	if err != nil {
@@ -60,12 +60,23 @@ func CheckHasCertificate(cert_name string) (bool, error) {
 	return false, nil
 }
 
-// 安装指定证书
+// Check if a certificate with the given name is trusted by the system
+func CheckCertificateTrusted(cert_name string) (bool, error) {
+	return check_certificate_trusted(cert_name)
+}
+
+// CheckCertificateDataTrusted checks whether the exact certificate is trusted by the system.
+// cert_name is used as a fallback on platforms whose root stores are name-based.
+func CheckCertificateDataTrusted(cert_data []byte, cert_name string) (bool, error) {
+	return check_certificate_data_trusted(cert_data, cert_name)
+}
+
+// Install a certificate
 func InstallCertificate(cert_data []byte) error {
 	return installCertificate(cert_data)
 }
 
-// 卸载指定证书
+// Uninstall a certificate by name
 func UninstallCertificate(name string) error {
 	return uninstallCertificate(name)
 }

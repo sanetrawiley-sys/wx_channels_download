@@ -66,7 +66,7 @@ func fetchCertificates() ([]Certificate, error) {
 }
 
 func installCertificate(cert_data []byte) error {
-	cert_file, err := os.CreateTemp("", "SunnyRoot.cer")
+	cert_file, err := os.CreateTemp("", "SunnyNet.cer")
 	if err != nil {
 		return fmt.Errorf("没有创建证书的权限，%v\n", err.Error())
 	}
@@ -84,6 +84,20 @@ func installCertificate(cert_data []byte) error {
 		return fmt.Errorf("安装证书时发生错误，%v\n", string(output))
 	}
 	return nil
+}
+
+func check_certificate_trusted(cert_name string) (bool, error) {
+	// Windows: Certificates in LocalMachine\Root are inherently trusted.
+	// If the cert is installed, it's trusted.
+	installed, err := CheckHasCertificate(cert_name)
+	if err != nil {
+		return false, err
+	}
+	return installed, nil
+}
+
+func check_certificate_data_trusted(_ []byte, cert_name string) (bool, error) {
+	return check_certificate_trusted(cert_name)
 }
 
 func uninstallCertificate(name string) error {
