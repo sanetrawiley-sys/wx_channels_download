@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 
 	utilpkg "wx_channel/pkg/util"
@@ -50,11 +51,12 @@ type ChannelsMediaSpec struct {
 	// CodingFormat     string `json:"codingFormat"`
 	// DynamicRangeType int    `json:"dynamicRangeType"`
 	// Vfps             int    `json:"vfps"`
-	Width      float32 `json:"width"`
-	Height     float32 `json:"height"`
-	DurationMs int     `json:"durationMs"`
+	Width        float32 `json:"width"`
+	Height       float32 `json:"height"`
+	DurationMs   int     `json:"durationMs"`
+	VideoBitrate int     `json:"videoBitrate"`
+	LevelOrder   int     `json:"levelOrder"`
 	// QualityScore     int    `json:"qualityScore"`
-	// VideoBitrate     int    `json:"videoBitrate"`
 	// AudioBitrate     int    `json:"audioBitrate"`
 	// LevelOrder       int    `json:"levelOrder"`
 	// Bypass           string `json:"bypass"`
@@ -96,15 +98,44 @@ type ChannelsMediaItem struct {
 func (m *ChannelsMediaItem) UnmarshalJSON(data []byte) error {
 	type alias ChannelsMediaItem
 	aux := &struct {
-		DecodeKey flexibleString `json:"decodeKey"`
+		DecodeKey    flexibleString `json:"decodeKey"`
+		MediaType    flexible_int   `json:"mediaType"`
+		VideoPlayLen flexible_int   `json:"videoPlayLen"`
+		FileSize     flexible_int   `json:"fileSize"`
 		*alias
 	}{
-		alias: (*alias)(m),
+		alias:        (*alias)(m),
+		MediaType:    flexible_int(m.MediaType),
+		VideoPlayLen: flexible_int(m.VideoPlayLen),
+		FileSize:     flexible_int(m.FileSize),
 	}
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
 	m.DecodeKey = string(aux.DecodeKey)
+	m.MediaType = int(aux.MediaType)
+	m.VideoPlayLen = int(aux.VideoPlayLen)
+	m.FileSize = int(aux.FileSize)
+	return nil
+}
+
+// flexible_int accepts JSON integers and their quoted representation without
+// passing through float64, which would lose precision for large file sizes.
+type flexible_int int
+
+func (n *flexible_int) UnmarshalJSON(data []byte) error {
+	var value json.Number
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if value == "" { // JSON null leaves the current value unchanged.
+		return nil
+	}
+	parsed, err := strconv.Atoi(string(value))
+	if err != nil {
+		return err
+	}
+	*n = flexible_int(parsed)
 	return nil
 }
 
