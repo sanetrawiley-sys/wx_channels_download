@@ -46,11 +46,12 @@ echo "Building wx_video_download for ${PLATFORM}..."
 (
     cd "$ROOT_DIR"
     env GOCACHE="$GOCACHE" CGO_ENABLED=0 GOOS=linux GOARCH="$TARGETARCH" \
-        bash build/build-go.sh -trimpath -tags "with_gvisor,embed_frontend_inject" -ldflags="-s -w -X main.Mode=release" \
+        bash build/build-go.sh -trimpath -tags "with_gvisor,sqlite_only,embed_frontend_inject" -ldflags="-s -w -X main.Mode=release" \
         -o "$BUILD_DIR/wx_video_download" .
 )
 
 cp "$ROOT_DIR/docker/webtop/Dockerfile" "$BUILD_DIR/Dockerfile"
+cp -R "$ROOT_DIR/docker/webtop/hwcap" "$BUILD_DIR/hwcap"
 cp "$CONFIG_FILE" "$BUILD_DIR/config.yaml"
 cp "$ROOT_DIR/docs/public/SunnyNet.cer" "$BUILD_DIR/SunnyNet.cer"
 if [ -n "$GLOBAL_SCRIPT" ]; then
